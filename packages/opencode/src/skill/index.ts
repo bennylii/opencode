@@ -15,6 +15,7 @@ import { ConfigMarkdown } from "@/config/markdown"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Glob } from "@opencode-ai/core/util/glob"
 import { Discovery } from "./discovery"
+import { BrowserUseSkills } from "@opencode-ai/browser-use"
 import { isRecord } from "@/util/record"
 import { escapeHtml } from "@/util/html"
 
@@ -273,13 +274,21 @@ const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("Skill.state")(function* () {
         const s: State = { skills: {}, dirs: new Set() }
-        // Register the built-in skill BEFORE disk discovery so a user-disk
-        // skill with the same name can override it.
+        // Register built-in skills BEFORE disk discovery so a user-disk
+        // skill with the same name can override them.
         s.skills[CUSTOMIZE_OPENCODE_SKILL_NAME] = {
           name: CUSTOMIZE_OPENCODE_SKILL_NAME,
           description: CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION,
           location: "<built-in>",
           content: CUSTOMIZE_OPENCODE_SKILL_BODY,
+        }
+        for (const skill of BrowserUseSkills) {
+          s.skills[skill.name] = {
+            name: skill.name,
+            description: skill.description,
+            location: "<built-in>",
+            content: skill.content,
+          }
         }
         yield* loadSkills(s, yield* InstanceState.get(discovered), events)
         return s

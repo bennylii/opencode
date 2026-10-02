@@ -157,6 +157,7 @@ for (const item of targets) {
   await $`mkdir -p dist/${name}/bin`
 
   const workerPath = "./src/cli/tui/worker.ts"
+  const browserUseWorkerPath = "./src/browser/worker.ts"
   const treeSitterWorkerPath = "opentui-tree-sitter-worker.js"
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
 
@@ -164,7 +165,7 @@ for (const item of targets) {
     conditions: ["bun", "node"],
     tsconfig: "./tsconfig.json",
     plugins: [plugin],
-    external: ["node-gyp"],
+    external: ["node-gyp", "chromium-bidi"],
     format: "esm",
     minify: true,
     sourcemap: sourcemapsFlag ? "linked" : "none",
@@ -186,6 +187,7 @@ for (const item of targets) {
     entrypoints: [
       "./src/index.ts",
       workerPath,
+      browserUseWorkerPath,
       treeSitterWorkerPath,
       ...(embeddedFileMap ? ["opencode-web-ui.gen.ts"] : []),
     ],
@@ -195,6 +197,7 @@ for (const item of targets) {
       OPENCODE_MODELS_DEV: generated.modelsData,
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + treeSitterWorkerPath,
       OPENCODE_WORKER_PATH: workerPath,
+      OPENCODE_BROWSER_USE_WORKER_PATH: browserUseWorkerPath,
       OPENCODE_CHANNEL: `'${Script.channel}'`,
       OPENCODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
       ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),

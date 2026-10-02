@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@opencode-ai/browser-use",
+  "version": "0.1.0",
+  "description": "Browser automation runtime, agent-side object model, and confined JS kernel ported from ZCode Browser Use",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contracts": "./src/contracts.ts",
+    "./docs": "./src/docs.ts",
+    "./runtime": "./src/runtime/index.ts",
+    "./facade": "./src/facade/index.ts",
+    "./kernel": "./src/kernel/index.ts",
+    "./js": "./src/js-tool/index.ts",
+    "./worker": "./src/js-tool/worker.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "meriyah": "^7.1.1",
+    "playwright-core": "1.59.1"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:"
+  }
+}
