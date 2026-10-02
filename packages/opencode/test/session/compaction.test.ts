@@ -222,6 +222,38 @@ function processorLayer(result: "continue" | "compact") {
   )
 }
 
+/**
+ * 记录每次摘要请求的 prompt 并依次返回给定结果，用于验证 prompt-too-long 重试。
+ */
+function recordingProcessorLayer(results: Array<"continue" | "compact" | "stop">) {
+  const calls: string[] = []
+  const layer = Layer.succeed(
+    SessionProcessorModule.SessionProcessor.Service,
+    SessionProcessorModule.SessionProcessor.Service.of({
+      create: Effect.fn("TestSessionProcessor.create")((input) =>
+        Effect.sync(() => {
+          const msg = input.assistantMessage
+          let index = 0
+          return {
+            get message() {
+              return msg
+            },
+            updateToolCall: Effect.fn("TestSessionProcessor.updateToolCall")(() => Effect.succeed(undefined)),
+            completeToolCall: Effect.fn("TestSessionProcessor.completeToolCall")(() => Effect.void),
+            process: Effect.fn("TestSessionProcessor.process")((streamInput: LLM.StreamInput) => {
+              const result = results[Math.min(index, results.length - 1)] ?? "continue"
+              index += 1
+              calls.push(JSON.stringify(streamInput.messages))
+              return Effect.succeed(result)
+            }),
+          } satisfies SessionProcessorModule.SessionProcessor.Handle
+        }),
+      ),
+    }),
+  )
+  return { calls, layer }
+}
+
 function cfg(compaction?: ConfigV1.Info["compaction"]) {
   const base = Schema.decodeUnknownSync(ConfigV1.Info)({}) as ConfigV1.Info
   return Layer.succeed(Config.Service, TestConfig.make({ get: () => Effect.succeed({ ...base, compaction }) }))
@@ -255,6 +287,7 @@ type CompactionProcessOptions = {
   plugin?: Layer.Layer<Plugin.Service>
   provider?: ReturnType<typeof wide>
   config?: Layer.Layer<Config.Service>
+  processor?: Layer.Layer<SessionProcessorModule.SessionProcessor.Service>
 }
 
 function withCompaction(options?: CompactionProcessOptions) {
@@ -270,7 +303,10 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
   if (!options?.llm) {
     return AppNodeBuilder.build(compactionTestNode, [
       ...replacements,
-      [SessionProcessorModule.SessionProcessor.node, processorLayer(options?.result ?? "continue")],
+      [
+        SessionProcessorModule.SessionProcessor.node,
+        options?.processor ?? processorLayer(options?.result ?? "continue"),
+      ],
       ...(options?.plugin ? ([[Plugin.node, options.plugin]] as const) : []),
       ...(options?.config ? ([[Config.node, options.config]] as const) : []),
     ])
@@ -1995,4 +2031,77 @@ describe("session.compaction.fitConversationToBudget", () => {
     const conversation = "small"
     expect(fitConversationToBudget({ prefix: "p", conversation, budget: 1_000 })).toBe(conversation)
   })
+})
+describe("session.compaction.prompt-too-long recovery", () => {
+  function seedHistory() {
+    return Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      for (let index = 0; index < 40; index++) {
+        yield* createUserMessage(session.id, `chunk-${index}-` + "x".repeat(5_000))
+      }
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+      const parent = msgs.at(-1)?.info.id
+      expect(parent).toBeTruthy()
+      return { session, parent: parent!, msgs }
+    })
+  }
+
+  itCompaction.instance(
+    "retries the summary with a shrunk conversation",
+    () => {
+      const recorder = recordingProcessorLayer(["compact", "continue"])
+      return Effect.gen(function* () {
+        const { session, parent, msgs } = yield* seedHistory()
+        const result = yield* SessionCompaction.use.process({
+          parentID: parent,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+
+        expect(result).toBe("continue")
+        expect(recorder.calls).toHaveLength(2)
+        expect(recorder.calls[1]!.length).toBeLessThan(recorder.calls[0]!.length)
+      }).pipe(
+        withCompaction({
+          processor: recorder.layer,
+          config: cfg({ preserve_recent_tokens: 0 }),
+        }),
+      )
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "stops after the maximum summary attempts",
+    () => {
+      const recorder = recordingProcessorLayer(["compact"])
+      return Effect.gen(function* () {
+        const { session, parent, msgs } = yield* seedHistory()
+        const result = yield* SessionCompaction.use.process({
+          parentID: parent,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+
+        expect(result).toBe("stop")
+        expect(recorder.calls).toHaveLength(3)
+        const summary = (yield* SessionNs.use.messages({ sessionID: session.id })).find(
+          (msg) => msg.info.role === "assistant" && msg.info.summary,
+        )
+        expect(summary?.info.role).toBe("assistant")
+        if (summary?.info.role === "assistant") {
+          expect(summary.info.finish).toBe("error")
+        }
+      }).pipe(
+        withCompaction({
+          processor: recorder.layer,
+          config: cfg({ preserve_recent_tokens: 0 }),
+        }),
+      )
+    },
+    { git: true },
+  )
 })

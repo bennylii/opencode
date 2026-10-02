@@ -476,17 +476,16 @@ const layer = Layer.effect(
       const msgs = structuredClone(selected.head)
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
       const conversation = msgs.map(serialize).filter(Boolean).join("\n\n")
-      const nextPrompt =
-        compacting.prompt ??
-        [
-          buildPrompt({
-            previousSummary,
-            context: [conversation],
-          }),
-          ...compacting.context,
-        ]
-          .filter(Boolean)
-          .join("\n\n")
+      // 摘要请求每次基于当前（可能已被重试裁剪过的）历史重建：buildPrompt 会把历史包进
+      // <conversation> 区块并附上总结指令；插件自定义 prompt 则按原文追加历史。
+      const summaryRequestText = (history: string) =>
+        compacting.prompt
+          ? [compacting.prompt, "The following is the conversation history:", history]
+              .filter(Boolean)
+              .join("\n\n")
+          : [buildPrompt({ previousSummary, context: [history] }), ...compacting.context]
+              .filter(Boolean)
+              .join("\n\n")
       const ctx = yield* InstanceState.context
       const msg: SessionV1.Assistant = {
         id: MessageID.ascending(),
@@ -522,13 +521,7 @@ const layer = Layer.effect(
       })
       // 摘要请求本身也可能 prompt-too-long：逐次收紧被摘要的历史后重试。
       // 媒体已在 serialize() 中投影为文本占位符，这里只需处理整体大小。
-      const summaryRequestText = (history: string) =>
-        [
-          nextPrompt,
-          ...(compacting.prompt ? ["The following is the conversation history:", history] : []),
-        ]
-          .filter(Boolean)
-          .join("\n\n")
+      const summaryPrefix = summaryRequestText("")
       const summaryBudget = usable({ cfg, model, outputTokenMax: flags.outputTokenMax })
       let workingConversation = conversation
       let result: "continue" | "compact" | "stop" = "compact"
@@ -553,10 +546,11 @@ const layer = Layer.effect(
           model,
         })
         if (result !== "compact") break
+        // 每次重试都更激进地收缩历史：0.6 → 0.36 → 0.216 × 可用预算
         const shrunk = fitConversationToBudget({
-          prefix: nextPrompt,
+          prefix: summaryPrefix,
           conversation: workingConversation,
-          budget: Math.max(1, Math.floor(summaryBudget * 0.6)),
+          budget: Math.max(1, Math.floor(summaryBudget * 0.6 ** (attempt + 1))),
         })
         if (shrunk === workingConversation) break
         workingConversation = shrunk
