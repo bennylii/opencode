@@ -5,7 +5,7 @@ import { Catalog } from "./catalog"
 import { CommandV2 } from "./command"
 import { Config } from "./config"
 import { LayerNode } from "./effect/layer-node"
-import { Node } from "./effect/app-node"
+import { Node, makeGlobalNode } from "./effect/app-node"
 import { FileMutation } from "./file-mutation"
 import { FileSystem } from "./filesystem"
 import { FileSystemSearch } from "./filesystem/search"
@@ -25,6 +25,8 @@ import { QuestionV2 } from "./question"
 import { Reference } from "./reference"
 import { ReferenceGuidance } from "./reference/guidance"
 import * as SessionRunnerLLM from "./session/runner/llm"
+import * as SessionExecutionLocal from "./session/execution/local"
+import { SessionExecution } from "./session/execution"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SessionTodo } from "./session/todo"
 import { SkillV2 } from "./skill"
@@ -84,11 +86,27 @@ export type LocationError = LayerNode.Error<typeof locationServices>
 export function buildLocationServiceMap(
   replacements: LayerNode.Replacements = [],
 ): Layer.Layer<LocationServiceMap.Service> {
-  return Layer.effect(
+  // Hoisted globals (for example SessionExecutionLocal) depend back on the
+  // location map. Bind the map node to the map layer itself so those globals
+  // resolve without requiring an outer LocationServiceMap replacement.
+  const self = makeGlobalNode({
+    service: LocationServiceMap.Service,
+    layer: Layer.unwrap(Effect.sync(() => map)),
+    deps: [],
+  })
+  const map: Layer.Layer<LocationServiceMap.Service> = Layer.effect(
     LocationServiceMap.Service,
     LayerMap.make(
       (ref: Location.Ref) => {
-        const allReplacements = replacements.concat([[Location.node, Location.boundNode(ref)]])
+        // Default to a durable-recording no-op unless the caller binds a real
+        // process execution implementation (production does). Caller
+        // replacements are applied after the defaults so they win.
+        const allReplacements = ([[SessionExecution.node, SessionExecution.noopLayer]] as LayerNode.Replacements)
+          .concat(replacements)
+          .concat([
+            [Location.node, Location.boundNode(ref)],
+            [LocationServiceMap.node, self],
+          ])
         // Apply replacements during hoist, not afterward: replacements can
         // introduce new tagged dependencies (Location.boundNode depends on
         // Project), and the hoist walk is the only pass that can still slice
@@ -109,7 +127,10 @@ export function buildLocationServiceMap(
       { idleTimeToLive: "60 minutes" },
     ),
   )
+  return map
 }
 
 // This is temporary for backwards compatibility
-export const locationServiceMapLayer = buildLocationServiceMap()
+export const locationServiceMapLayer = buildLocationServiceMap([
+  [SessionExecution.node, SessionExecutionLocal.node],
+])

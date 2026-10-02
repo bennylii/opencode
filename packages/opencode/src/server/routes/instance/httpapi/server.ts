@@ -54,6 +54,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
+import { makeGlobalNode } from "@opencode-ai/core/effect/app-node"
 import { EventV2 } from "@opencode-ai/core/event"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Npm } from "@opencode-ai/core/npm"
@@ -271,7 +272,15 @@ const app = LayerNode.group([
 export function createRoutes(
   corsOptions?: CorsOptions,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
-  const locationServiceMapV2 = buildLocationServiceMap()
+  const locationServiceMapV2 = buildLocationServiceMap([[SessionExecution.node, SessionExecutionLocal.node]])
+  // A single map node shared by every node graph in this composition. Passing
+  // the node (rather than the raw layer) also stops AppNodeBuilder from
+  // auto-creating a second location map for graphs that depend on the map.
+  const locationMapNode = makeGlobalNode({
+    service: LocationServiceMap.Service,
+    layer: locationServiceMapV2,
+    deps: [],
+  })
 
   return Layer.mergeAll(
     rootApiRoutes,
@@ -288,7 +297,7 @@ export function createRoutes(
       corsVaryFix,
       fenceLayer,
       cors(corsOptions),
-      AppNodeBuilderV1.build(MoveSession.node, [[LocationServiceMap.node, locationServiceMapV2]]),
+      AppNodeBuilderV1.build(MoveSession.node, [[LocationServiceMap.node, locationMapNode]]),
       HttpServer.layerServices,
     ]),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
@@ -297,13 +306,13 @@ export function createRoutes(
     Layer.provide(PtyEnvironment.layer),
     Layer.provide(
       AppNodeBuilderV1.build(SessionV2.node, [
-        [LocationServiceMap.node, locationServiceMapV2],
+        [LocationServiceMap.node, locationMapNode],
         [SessionExecution.node, SessionExecutionLocal.node],
       ]),
     ),
     Layer.provide(locationServiceMapV2),
 
-    Layer.provide(AppNodeBuilderV1.build(app)),
+    Layer.provide(AppNodeBuilderV1.build(app, [[LocationServiceMap.node, locationMapNode]])),
     // Must stay last: layers provided later in this pipe build beneath earlier ones,
     // so Observability must come after every service graph. Otherwise eagerly forked
     // fibers (e.g. the ModelsDev background refresh) capture Effect's default stdout
