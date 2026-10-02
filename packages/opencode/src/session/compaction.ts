@@ -12,7 +12,7 @@ import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
 
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { isOverflow as overflow, usable } from "./overflow"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
@@ -22,8 +22,23 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { buildPrompt } from "@opencode-ai/core/session/compaction"
 import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-event"
+import { EventV2 } from "@opencode-ai/core/event"
 
 export const Event = SessionCompactionEvent
+
+/**
+ * Microcompact（清理旧工具结果）事件 —— 借鉴 ZCode 的 boundary payload，
+ * 供客户端/时间线消费。以本地事件定义发布，避免改动 schema 生成链。
+ */
+export const Microcompacted = EventV2.define({
+  type: "session.microcompacted",
+  schema: {
+    sessionID: SessionID,
+    trigger: Schema.Literals(["idle", "token_pressure"]),
+    clearedParts: Schema.Number,
+    tokensSaved: Schema.Number,
+  },
+})
 
 export const PRUNE_MINIMUM = 20_000
 export const PRUNE_PROTECT = 40_000
@@ -31,6 +46,46 @@ const TOOL_OUTPUT_MAX_CHARS = 2_000
 const PRUNE_PROTECTED_TOOLS = ["skill"]
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 15_000
+
+// ── Microcompact 策略（移植自 ZCode compact/microcompact.ts）──────────────
+/** 保留最近 N 个工具调用组，避免清掉模型正在使用的最新结果。 */
+export const MICROCOMPACT_KEEP_RECENT_GROUPS = 5
+/** 空闲触发：距离上一次 assistant 完成超过 60 分钟即清理旧结果。 */
+export const MICROCOMPACT_IDLE_MS = 60 * 60_000
+/** 低于该节省量不做清理，避免无意义改写历史。 */
+export const MICROCOMPACT_MIN_TOKEN_SAVINGS = 256
+/** 压力阈值 = min(0.9 × usable, usable − 2000)，比自动压缩更早触发。 */
+const MICROCOMPACT_THRESHOLD_RATIO = 0.9
+const MICROCOMPACT_THRESHOLD_BUFFER = 2_000
+/** 压缩摘要请求 prompt-too-long 时的最大尝试次数（逐次收紧历史）。 */
+const COMPACT_SUMMARY_MAX_ATTEMPTS = 3
+
+function microcompactThreshold(usableTokens: number): number {
+  const ratio = Math.floor(usableTokens * MICROCOMPACT_THRESHOLD_RATIO)
+  const buffer = usableTokens - MICROCOMPACT_THRESHOLD_BUFFER
+  return Math.max(0, Math.min(ratio, buffer))
+}
+
+/**
+ * 把压缩摘要请求的会话历史裁剪到 token 预算内：从最旧的块开始丢弃，
+ * 保留末尾最近的对话。返回同一字符串表示已经放不下更多。
+ */
+export function fitConversationToBudget(input: {
+  prefix: string
+  conversation: string
+  budget: number
+}): string {
+  if (!input.conversation) return input.conversation
+  const prefixTokens = Token.estimate(input.prefix)
+  if (prefixTokens + Token.estimate(input.conversation) <= input.budget) return input.conversation
+  const chunks = input.conversation.split("\n\n")
+  let kept = chunks
+  while (kept.length > 1 && prefixTokens + Token.estimate(kept.join("\n\n")) > input.budget) {
+    kept = kept.slice(1)
+  }
+  if (kept.length === chunks.length) return input.conversation
+  return `[Earlier conversation omitted to fit the compaction request]\n\n${kept.join("\n\n")}`
+}
 type Turn = {
   start: number
   end: number
@@ -268,52 +323,95 @@ const layer = Layer.effect(
       }
     })
 
-    // goes backwards through parts until there are PRUNE_PROTECT tokens worth of tool
-    // calls, then erases output of older tool calls to free context space
+    /**
+     * Microcompact：提前清理旧的已完成工具结果，避免走到完整压缩。
+     *
+     * 触发条件（移植自 ZCode）：
+     * - 空闲：距上次 assistant 完成超过 60 分钟；
+     * - 压力：上一次 provider usage 达到 threshold = min(0.9 × usable, usable − 2000)；
+     *   没有可用 usage 时退化为「旧工具结果积累超过 PRUNE_PROTECT」。
+     * 保留最近 5 个工具调用组；节省低于 256 token 不改写历史。
+     */
     const prune = Effect.fn("SessionCompaction.prune")(function* (input: { sessionID: SessionID }) {
       const cfg = yield* config.get()
       if (!cfg.compaction?.prune) return
-      yield* Effect.logInfo("pruning")
 
       const msgs = yield* session
         .messages({ sessionID: input.sessionID })
         .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(undefined)))
       if (!msgs) return
 
-      let total = 0
-      let pruned = 0
-      const toPrune: SessionV1.ToolPart[] = []
-      let turns = 0
-
-      loop: for (let msgIndex = msgs.length - 1; msgIndex >= 0; msgIndex--) {
-        const msg = msgs[msgIndex]
-        if (msg.info.role === "user") turns++
-        if (turns < 2) continue
-        if (msg.info.role === "assistant" && msg.info.summary) break loop
-        for (let partIndex = msg.parts.length - 1; partIndex >= 0; partIndex--) {
-          const part = msg.parts[partIndex]
+      type Candidate = { part: SessionV1.ToolPart; tokens: number }
+      const groups: Candidate[][] = []
+      for (const msg of msgs) {
+        const current: Candidate[] = []
+        for (const part of msg.parts) {
           if (part.type !== "tool") continue
           if (part.state.status !== "completed") continue
           if (PRUNE_PROTECTED_TOOLS.includes(part.tool)) continue
-          if (part.state.time.compacted) break loop
-          const estimate = Token.estimate(part.state.output)
-          total += estimate
-          if (total <= PRUNE_PROTECT) continue
-          pruned += estimate
-          toPrune.push(part)
+          if (part.state.time.compacted) continue
+          current.push({ part, tokens: Token.estimate(part.state.output) })
         }
+        if (current.length > 0) groups.push(current)
+      }
+      const candidates = groups.flat()
+      if (candidates.length === 0) return
+
+      const lastAssistant = msgs.findLast(
+        (msg) => msg.info.role === "assistant" && !msg.info.summary,
+      )
+      const completedAt =
+        lastAssistant?.info.role === "assistant" ? lastAssistant.info.time.completed : undefined
+      const idle = completedAt !== undefined && Date.now() - completedAt > MICROCOMPACT_IDLE_MS
+
+      let pressure = false
+      if (lastAssistant?.info.role === "assistant") {
+        const model = yield* provider
+          .getModel(lastAssistant.info.providerID, lastAssistant.info.modelID)
+          .pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (model) {
+          const usage = lastAssistant.info.tokens
+          const count =
+            usage.total || usage.input + usage.output + usage.cache.read + usage.cache.write
+          pressure =
+            count >= microcompactThreshold(usable({ cfg, model, outputTokenMax: flags.outputTokenMax }))
+        }
+      }
+      // 兼容没有 provider usage 的会话：旧工具输出本身超过保护阈值也算压力。
+      if (!pressure && !idle) {
+        const toolTokens = candidates.reduce((total, candidate) => total + candidate.tokens, 0)
+        pressure = toolTokens > PRUNE_PROTECT
+      }
+      if (!idle && !pressure) return
+
+      const keep = new Set(groups.slice(-MICROCOMPACT_KEEP_RECENT_GROUPS).flat())
+      const toClear = candidates.filter((candidate) => !keep.has(candidate))
+      const tokensSaved = toClear.reduce((total, candidate) => total + candidate.tokens, 0)
+      if (tokensSaved < MICROCOMPACT_MIN_TOKEN_SAVINGS) {
+        yield* Effect.logInfo("microcompact skipped", {
+          reason: "below_min_savings",
+          tokensSaved,
+        })
+        return
       }
 
-      yield* Effect.logInfo("found", { pruned, total })
-      if (pruned > PRUNE_MINIMUM) {
-        for (const part of toPrune) {
-          if (part.state.status === "completed") {
-            part.state.time.compacted = Date.now()
-            yield* session.updatePart(part)
-          }
-        }
-        yield* Effect.logInfo("pruned", { count: toPrune.length })
+      for (const candidate of toClear) {
+        if (candidate.part.state.status !== "completed") continue
+        candidate.part.state.time.compacted = Date.now()
+        yield* session.updatePart(candidate.part)
       }
+      const trigger = idle ? ("idle" as const) : ("token_pressure" as const)
+      yield* events.publish(Microcompacted, {
+        sessionID: input.sessionID,
+        trigger,
+        clearedParts: toClear.length,
+        tokensSaved,
+      })
+      yield* Effect.logInfo("microcompacted", {
+        trigger,
+        cleared: toClear.length,
+        tokensSaved,
+      })
     })
 
     const processCompaction = Effect.fn("SessionCompaction.process")(function* (input: {
@@ -422,30 +520,51 @@ const layer = Layer.effect(
         sessionID: input.sessionID,
         model,
       })
-      const result = yield* processor.process({
-        user: userMessage,
-        agent,
-        sessionID: input.sessionID,
-        tools: {},
-        system: [],
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: [
-                  nextPrompt,
-                  ...(compacting.prompt ? ["The following is the conversation history:", conversation] : []),
-                ]
-                  .filter(Boolean)
-                  .join("\n\n"),
-              },
-            ],
-          },
-        ],
-        model,
-      })
+      // 摘要请求本身也可能 prompt-too-long：逐次收紧被摘要的历史后重试。
+      // 媒体已在 serialize() 中投影为文本占位符，这里只需处理整体大小。
+      const summaryRequestText = (history: string) =>
+        [
+          nextPrompt,
+          ...(compacting.prompt ? ["The following is the conversation history:", history] : []),
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      const summaryBudget = usable({ cfg, model, outputTokenMax: flags.outputTokenMax })
+      let workingConversation = conversation
+      let result: "continue" | "compact" | "stop" = "compact"
+      for (let attempt = 0; attempt < COMPACT_SUMMARY_MAX_ATTEMPTS; attempt++) {
+        result = yield* processor.process({
+          user: userMessage,
+          agent,
+          sessionID: input.sessionID,
+          tools: {},
+          system: [],
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: summaryRequestText(workingConversation),
+                },
+              ],
+            },
+          ],
+          model,
+        })
+        if (result !== "compact") break
+        const shrunk = fitConversationToBudget({
+          prefix: nextPrompt,
+          conversation: workingConversation,
+          budget: Math.max(1, Math.floor(summaryBudget * 0.6)),
+        })
+        if (shrunk === workingConversation) break
+        workingConversation = shrunk
+        yield* Effect.logInfo("compaction summary too long, retrying", {
+          attempt: attempt + 1,
+          budget: summaryBudget,
+        })
+      }
 
       if (result === "compact") {
         processor.message.error = new SessionV1.ContextOverflowError({

@@ -29,6 +29,7 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { SessionContextUsage } from "./context-usage"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -110,6 +111,15 @@ const live: Layer.Layer<
         plugin,
         flags,
         isWorkflow,
+      })
+
+      yield* SessionContextUsage.log({
+        sessionID: input.sessionID,
+        providerID: input.model.providerID,
+        modelID: input.model.id,
+        system: prepared.system,
+        tools: prepared.tools,
+        messages: prepared.messages,
       })
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
