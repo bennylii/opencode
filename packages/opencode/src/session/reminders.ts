@@ -12,6 +12,23 @@ import PROMPT_PLAN from "./prompt/plan.txt"
 import BUILD_SWITCH from "./prompt/build-switch.txt"
 import PLAN_MODE from "./prompt/plan-mode.txt"
 
+const PLAN_REFERENCE_MAX_CHARS = 48_000
+
+function planReference(input: { plan: string; content: string | undefined }): string {
+  if (!input.content || !input.content.trim()) return `A plan file exists at ${input.plan}.`
+  const content =
+    input.content.length > PLAN_REFERENCE_MAX_CHARS
+      ? `${input.content.slice(0, PLAN_REFERENCE_MAX_CHARS)}\n… [plan truncated]`
+      : input.content
+  return [
+    `A plan file exists at ${input.plan}. Continue if it is not already complete.`,
+    "",
+    "Plan contents:",
+    "",
+    content.trim(),
+  ].join("\n")
+}
+
 export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
   messages: SessionV1.WithParts[]
   agent: Agent.Info
@@ -36,12 +53,17 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
     }
     const wasPlan = input.messages.some((msg) => msg.info.role === "assistant" && msg.info.agent === "plan")
     if (wasPlan && input.agent.name === "build") {
+      const ctx = yield* InstanceState.context
+      const plan = Session.plan(input.session, ctx)
+      const content = (yield* fsys.existsSafe(plan))
+        ? yield* fsys.readFileStringSafe(plan).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        : undefined
       userMessage.parts.push({
         id: PartID.ascending(),
         messageID: userMessage.info.id,
         sessionID: userMessage.info.sessionID,
         type: "text",
-        text: BUILD_SWITCH,
+        text: `${BUILD_SWITCH}\n\n${planReference({ plan, content })}`,
         synthetic: true,
       })
     }
@@ -53,14 +75,15 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
     const ctx = yield* InstanceState.context
     const plan = Session.plan(input.session, ctx)
     const exists = yield* fsys.existsSafe(plan)
+    const content = exists
+      ? yield* fsys.readFileStringSafe(plan).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      : undefined
     const part = yield* sessions.updatePart({
       id: PartID.ascending(),
       messageID: userMessage.info.id,
       sessionID: userMessage.info.sessionID,
       type: "text",
-      text: exists
-        ? `${BUILD_SWITCH}\n\nA plan file exists at ${plan}. You should execute on the plan defined within it`
-        : BUILD_SWITCH,
+      text: exists ? `${BUILD_SWITCH}\n\n${planReference({ plan, content })}` : BUILD_SWITCH,
       synthetic: true,
     })
     userMessage.parts.push(part)

@@ -13,6 +13,8 @@ export interface Interface {
   readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
+  /** Grants instance-scoped pre-approval rules (e.g. from an approved plan's allowedPrompts). */
+  readonly grant: (rules: ReadonlyArray<PermissionV1.Rule>) => Effect.Effect<void>
 }
 
 interface PendingEntry {
@@ -171,7 +173,12 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.info)
     })
 
-    return Service.of({ ask, reply, list })
+    const grant = Effect.fn("Permission.grant")(function* (rules: ReadonlyArray<PermissionV1.Rule>) {
+      const { approved } = yield* InstanceState.get(state)
+      for (const rule of rules) approved.push(rule)
+    })
+
+    return Service.of({ ask, reply, list, grant })
   }),
 )
 

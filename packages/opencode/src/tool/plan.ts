@@ -6,11 +6,28 @@ import { Question } from "../question"
 import { Session } from "@/session/session"
 import { MessageV2 } from "../session/message-v2"
 import { Provider } from "@/provider/provider"
+import { Permission } from "@/permission"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { MessageID, PartID } from "../session/schema"
 import EXIT_DESCRIPTION from "./plan-exit.txt"
 
-export const Parameters = Schema.Struct({})
+export const Parameters = Schema.Struct({
+  plan: Schema.optional(Schema.String).annotate({
+    description: "Final plan markdown. When provided it is written to the plan file before approval.",
+  }),
+  allowedPrompts: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        permission: Schema.String,
+        pattern: Schema.String,
+      }),
+    ),
+  ).annotate({
+    description:
+      'Concrete permission rules to pre-approve for execution, e.g. { permission: "bash", pattern: "npm test*" }.',
+  }),
+})
 
 export const PlanExitTool = Tool.define(
   "plan_exit",
@@ -18,15 +35,36 @@ export const PlanExitTool = Tool.define(
     const session = yield* Session.Service
     const question = yield* Question.Service
     const provider = yield* Provider.Service
+    const permission = yield* Permission.Service
+    const fsys = yield* FSUtil.Service
 
     return {
       description: EXIT_DESCRIPTION,
       parameters: Parameters,
-      execute: (_params: {}, ctx: Tool.Context) =>
+      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
         Effect.gen(function* () {
           const instance = yield* InstanceState.context
           const info = yield* session.get(ctx.sessionID)
           const plan = path.relative(instance.worktree, Session.plan(info, instance))
+          const absolute = Session.plan(info, instance)
+
+          if (params.plan !== undefined) {
+            if (!params.plan.trim()) throw new Error("plan_exit requires a non-empty plan")
+            yield* fsys
+              .writeWithDirs(absolute, params.plan.endsWith("\n") ? params.plan : `${params.plan}\n`)
+              .pipe(Effect.orDie)
+          }
+          const content = yield* fsys.readFileStringSafe(absolute).pipe(Effect.orDie)
+          if (!content || !content.trim())
+            throw new Error(`Plan file is empty: ${plan}. Write the plan before exiting plan mode.`)
+
+          const allowed = params.allowedPrompts ?? []
+          if (allowed.length > 0) {
+            yield* permission
+              .grant(allowed.map((rule) => ({ permission: rule.permission, pattern: rule.pattern, action: "allow" as const })))
+              .pipe(Effect.orDie)
+          }
+
           const answers = yield* question.ask({
             sessionID: ctx.sessionID,
             questions: [
@@ -64,7 +102,18 @@ export const PlanExitTool = Tool.define(
             messageID: msg.id,
             sessionID: ctx.sessionID,
             type: "text",
-            text: `The plan at ${plan} has been approved, you can now edit files. Execute the plan`,
+            text: [
+              `The plan at ${plan} has been approved, you can now edit files. Execute the plan.`,
+              "Work through the plan items in order. After each item, run its verification and mark it done with",
+              "evidence using plan_update; use plan_status to check remaining items.",
+              ...(allowed.length > 0
+                ? [
+                    `Pre-approved permissions: ${allowed
+                      .map((rule) => `${rule.permission}: ${rule.pattern}`)
+                      .join(", ")}`,
+                  ]
+                : []),
+            ].join("\n"),
             synthetic: true,
           } satisfies SessionV1.TextPart)
 

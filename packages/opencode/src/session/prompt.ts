@@ -54,6 +54,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
+import { PlanContinuation } from "./plan-continuation"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 
@@ -1056,6 +1057,8 @@ const layer = Layer.effect(
       yield* revert.cleanup(session)
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
+      // 新的用户输入重置计划续跑的停滞计数。
+      PlanContinuation.resetPlanContinuation(input.sessionID)
 
       const permissions: PermissionV1.Rule[] = []
       for (const [t, enabled] of Object.entries(input.tools ?? {})) {
@@ -1124,6 +1127,46 @@ const layer = Layer.effect(
                 tool: orphan.tool,
                 callID: orphan.callID,
               })
+            }
+            // 计划项闭环：所有用户输入都已应答且计划仍有待办时，自动续跑下一项。
+            // 用户消息优先由本判断天然保证：若存在未应答的用户消息，parentID 检查不会命中。
+            const planContent =
+              flags.experimentalPlanMode && lastUser.agent !== "plan"
+                ? yield* fsys
+                    .readFileStringSafe(Session.plan(session, ctx))
+                    .pipe(Effect.catch(() => Effect.succeed(undefined)))
+                : undefined
+            const continuation = planContent?.trim()
+              ? PlanContinuation.nextPlanContinuation(sessionID, planContent)
+              : undefined
+            if (continuation) {
+              yield* Effect.logInfo("plan continuation", {
+                "session.id": sessionID,
+                item: continuation.item.text,
+              })
+              const continuationMessage = yield* sessions.updateMessage({
+                id: MessageID.ascending(),
+                role: "user",
+                sessionID,
+                agent: lastUser.agent,
+                model: lastUser.model,
+                time: { created: Date.now() },
+              })
+              yield* sessions.updatePart({
+                id: PartID.ascending(),
+                messageID: continuationMessage.id,
+                sessionID,
+                type: "text",
+                synthetic: true,
+                metadata: { plan_continue: true },
+                text: [
+                  `Continue with the next plan item: ${continuation.item.text}`,
+                  "",
+                  "Run its verification, then mark it done with plan_update (evidence required).",
+                  "If it is blocked, mark it blocked with a reason and stop.",
+                ].join("\n"),
+              } satisfies SessionV1.TextPart)
+              continue
             }
             yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
             break
