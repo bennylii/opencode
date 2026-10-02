@@ -262,6 +262,7 @@ export type SessionsListOutput = {
         readonly patch: string
       }>
     }
+    readonly queue?: { readonly autoDrain: boolean; readonly followupMode: "queue" | "guide" }
   }>
   readonly cursor: { readonly previous?: string | null; readonly next?: string | null }
 }
@@ -324,6 +325,7 @@ export type SessionsCreateOutput = {
         readonly patch: string
       }>
     }
+    readonly queue?: { readonly autoDrain: boolean; readonly followupMode: "queue" | "guide" }
   }
 }["data"]
 
@@ -362,6 +364,7 @@ export type SessionsGetOutput = {
         readonly patch: string
       }>
     }
+    readonly queue?: { readonly autoDrain: boolean; readonly followupMode: "queue" | "guide" }
   }
 }["data"]
 
@@ -399,6 +402,11 @@ export type SessionsPromptInput = {
       }>
     }
     readonly delivery?: "steer" | "queue" | null
+    readonly intent?: {
+      readonly mode?: "build" | "edit" | "plan" | "yolo"
+      readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      readonly context?: { readonly maxInputTokens: number }
+    } | null
     readonly resume?: boolean | null
   }["id"]
   readonly prompt: {
@@ -417,6 +425,11 @@ export type SessionsPromptInput = {
       }>
     }
     readonly delivery?: "steer" | "queue" | null
+    readonly intent?: {
+      readonly mode?: "build" | "edit" | "plan" | "yolo"
+      readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      readonly context?: { readonly maxInputTokens: number }
+    } | null
     readonly resume?: boolean | null
   }["prompt"]
   readonly delivery?: {
@@ -435,8 +448,36 @@ export type SessionsPromptInput = {
       }>
     }
     readonly delivery?: "steer" | "queue" | null
+    readonly intent?: {
+      readonly mode?: "build" | "edit" | "plan" | "yolo"
+      readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      readonly context?: { readonly maxInputTokens: number }
+    } | null
     readonly resume?: boolean | null
   }["delivery"]
+  readonly intent?: {
+    readonly id?: string | null
+    readonly prompt: {
+      readonly text: string
+      readonly files?: ReadonlyArray<{
+        readonly uri: string
+        readonly name?: string
+        readonly description?: string
+        readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+      }>
+      readonly agents?: ReadonlyArray<{
+        readonly name: string
+        readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+      }>
+    }
+    readonly delivery?: "steer" | "queue" | null
+    readonly intent?: {
+      readonly mode?: "build" | "edit" | "plan" | "yolo"
+      readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      readonly context?: { readonly maxInputTokens: number }
+    } | null
+    readonly resume?: boolean | null
+  }["intent"]
   readonly resume?: {
     readonly id?: string | null
     readonly prompt: {
@@ -453,6 +494,11 @@ export type SessionsPromptInput = {
       }>
     }
     readonly delivery?: "steer" | "queue" | null
+    readonly intent?: {
+      readonly mode?: "build" | "edit" | "plan" | "yolo"
+      readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      readonly context?: { readonly maxInputTokens: number }
+    } | null
     readonly resume?: boolean | null
   }["resume"]
 }
@@ -477,10 +523,90 @@ export type SessionsPromptOutput = {
       }>
     }
     readonly delivery: "steer" | "queue"
+    readonly intent?: {
+      readonly mode?: "build" | "edit" | "plan" | "yolo"
+      readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      readonly context?: { readonly maxInputTokens: number }
+    }
     readonly timeCreated: number
     readonly promotedSeq?: number
   }
 }["data"]
+
+export type SessionsQueueListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionsQueueListOutput = {
+  readonly data: ReadonlyArray<{
+    readonly admittedSeq: number
+    readonly id: string
+    readonly sessionID: string
+    readonly prompt: {
+      readonly text: string
+      readonly files?: ReadonlyArray<{
+        readonly uri: string
+        readonly mime: string
+        readonly name?: string
+        readonly description?: string
+        readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+      }>
+      readonly agents?: ReadonlyArray<{
+        readonly name: string
+        readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+      }>
+    }
+    readonly delivery: "steer" | "queue"
+    readonly intent?: {
+      readonly mode?: "build" | "edit" | "plan" | "yolo"
+      readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      readonly context?: { readonly maxInputTokens: number }
+    }
+    readonly timeCreated: number
+    readonly promotedSeq?: number
+  }>
+}["data"]
+
+export type SessionsQueueEditInput = {
+  readonly sessionID: { readonly sessionID: string; readonly messageID: string }["sessionID"]
+  readonly messageID: { readonly sessionID: string; readonly messageID: string }["messageID"]
+  readonly text: { readonly text: string }["text"]
+}
+
+export type SessionsQueueEditOutput = { readonly data: boolean }["data"]
+
+export type SessionsQueueRemoveInput = {
+  readonly sessionID: { readonly sessionID: string; readonly messageID: string }["sessionID"]
+  readonly messageID: { readonly sessionID: string; readonly messageID: string }["messageID"]
+}
+
+export type SessionsQueueRemoveOutput = { readonly data: boolean }["data"]
+
+export type SessionsQueueReorderInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly messageIDs: { readonly messageIDs: ReadonlyArray<string> }["messageIDs"]
+}
+
+export type SessionsQueueReorderOutput = void
+
+export type SessionsQueueSendNowInput = {
+  readonly sessionID: { readonly sessionID: string; readonly messageID: string }["sessionID"]
+  readonly messageID: { readonly sessionID: string; readonly messageID: string }["messageID"]
+}
+
+export type SessionsQueueSendNowOutput = { readonly data: boolean }["data"]
+
+export type SessionsQueuePolicyInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionsQueuePolicyOutput = {
+  readonly data: { readonly autoDrain: boolean; readonly followupMode: "queue" | "guide" }
+}["data"]
+
+export type SessionsQueueSetPolicyInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly autoDrain: { readonly autoDrain: boolean; readonly followupMode: "queue" | "guide" }["autoDrain"]
+  readonly followupMode: { readonly autoDrain: boolean; readonly followupMode: "queue" | "guide" }["followupMode"]
+}
+
+export type SessionsQueueSetPolicyOutput = void
 
 export type SessionsCompactInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
@@ -748,6 +874,11 @@ export type SessionsHistoryOutput = {
             }>
           }
           readonly delivery: "steer" | "queue"
+          readonly intent?: {
+            readonly mode?: "build" | "edit" | "plan" | "yolo"
+            readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+            readonly context?: { readonly maxInputTokens: number }
+          }
         }
       }
     | {
@@ -775,6 +906,76 @@ export type SessionsHistoryOutput = {
             }>
           }
           readonly delivery: "steer" | "queue"
+          readonly intent?: {
+            readonly mode?: "build" | "edit" | "plan" | "yolo"
+            readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+            readonly context?: { readonly maxInputTokens: number }
+          }
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.prompt.edited"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly messageID: string
+          readonly prompt: {
+            readonly text: string
+            readonly files?: ReadonlyArray<{
+              readonly uri: string
+              readonly mime: string
+              readonly name?: string
+              readonly description?: string
+              readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+            }>
+            readonly agents?: ReadonlyArray<{
+              readonly name: string
+              readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+            }>
+          }
+          readonly delivery: "steer" | "queue"
+          readonly intent?: {
+            readonly mode?: "build" | "edit" | "plan" | "yolo"
+            readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+            readonly context?: { readonly maxInputTokens: number }
+          }
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.prompt.removed"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: { readonly timestamp: number; readonly sessionID: string; readonly messageID: string }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.prompt.queue.reordered"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly messageIDs: ReadonlyArray<string>
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.queue.policy"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly autoDrain: boolean
+          readonly followupMode: "queue" | "guide"
         }
       }
     | {
@@ -1206,6 +1407,11 @@ export type SessionsEventsOutput =
           }>
         }
         readonly delivery: "steer" | "queue"
+        readonly intent?: {
+          readonly mode?: "build" | "edit" | "plan" | "yolo"
+          readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+          readonly context?: { readonly maxInputTokens: number }
+        }
       }
     }
   | {
@@ -1233,6 +1439,76 @@ export type SessionsEventsOutput =
           }>
         }
         readonly delivery: "steer" | "queue"
+        readonly intent?: {
+          readonly mode?: "build" | "edit" | "plan" | "yolo"
+          readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+          readonly context?: { readonly maxInputTokens: number }
+        }
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.prompt.edited"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly messageID: string
+        readonly prompt: {
+          readonly text: string
+          readonly files?: ReadonlyArray<{
+            readonly uri: string
+            readonly mime: string
+            readonly name?: string
+            readonly description?: string
+            readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+          }>
+          readonly agents?: ReadonlyArray<{
+            readonly name: string
+            readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+          }>
+        }
+        readonly delivery: "steer" | "queue"
+        readonly intent?: {
+          readonly mode?: "build" | "edit" | "plan" | "yolo"
+          readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+          readonly context?: { readonly maxInputTokens: number }
+        }
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.prompt.removed"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: { readonly timestamp: number; readonly sessionID: string; readonly messageID: string }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.prompt.queue.reordered"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly messageIDs: ReadonlyArray<string>
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.queue.policy"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly autoDrain: boolean
+        readonly followupMode: "queue" | "guide"
       }
     }
   | {

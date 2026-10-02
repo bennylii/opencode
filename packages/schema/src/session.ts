@@ -41,6 +41,11 @@ export const Info = Schema.Struct({
   location: Location.Ref,
   subpath: RelativePath.pipe(optional),
   revert: Revert.State.pipe(optional),
+  /** 队列策略：autoDrain 控制空闲自动提升；followupMode 控制下一项以新 turn 还是同 turn 续跑。 */
+  queue: Schema.Struct({
+    autoDrain: Schema.Boolean,
+    followupMode: Schema.Literals(["queue", "guide"]),
+  }).pipe(optional),
 }).annotate({ identifier: "SessionV2.Info" })
 
 export const ListAnchor = Schema.Struct({

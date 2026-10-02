@@ -149,8 +149,37 @@ export interface Interface {
     sessionID: SessionSchema.ID
     prompt: PromptInput.Prompt
     delivery?: SessionInput.Delivery
+    intent?: SessionInput.Intent
     resume?: boolean
   }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
+  readonly queue: {
+    readonly list: (
+      sessionID: SessionSchema.ID,
+    ) => Effect.Effect<ReadonlyArray<SessionInput.Admitted>, NotFoundError>
+    readonly edit: (input: {
+      sessionID: SessionSchema.ID
+      id: SessionMessage.ID
+      text: string
+    }) => Effect.Effect<boolean, NotFoundError>
+    readonly remove: (input: {
+      sessionID: SessionSchema.ID
+      id: SessionMessage.ID
+    }) => Effect.Effect<boolean, NotFoundError>
+    readonly reorder: (input: {
+      sessionID: SessionSchema.ID
+      messageIDs: ReadonlyArray<SessionMessage.ID>
+    }) => Effect.Effect<void, NotFoundError>
+    readonly sendNow: (input: {
+      sessionID: SessionSchema.ID
+      id: SessionMessage.ID
+    }) => Effect.Effect<boolean, NotFoundError>
+    readonly policy: (sessionID: SessionSchema.ID) => Effect.Effect<SessionInput.QueuePolicy, NotFoundError>
+    readonly setPolicy: (input: {
+      sessionID: SessionSchema.ID
+      autoDrain: boolean
+      followupMode: "queue" | "guide"
+    }) => Effect.Effect<void, NotFoundError>
+  }
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -364,12 +393,14 @@ const layer = Layer.effect(
             const prompt = resolvePrompt(input.prompt)
             const messageID = input.id ?? SessionMessage.ID.create()
             const delivery = input.delivery ?? "steer"
-            const expected = { sessionID: input.sessionID, messageID, prompt, delivery }
+            const intent = input.intent
+            const expected = { sessionID: input.sessionID, messageID, prompt, delivery, intent }
             const admitted = yield* SessionInput.admit(db, events, {
               id: messageID,
               sessionID: input.sessionID,
               prompt,
               delivery,
+              intent,
             }).pipe(
               Effect.catchDefect((defect) =>
                 defect instanceof SessionInput.LifecycleConflict
@@ -384,6 +415,42 @@ const layer = Layer.effect(
           }),
         ),
       ),
+      queue: {
+        list: Effect.fn("V2Session.queue.list")(function* (sessionID) {
+          yield* result.get(sessionID)
+          return yield* SessionInput.listPending(db, sessionID)
+        }),
+        edit: Effect.fn("V2Session.queue.edit")(function* (input) {
+          yield* result.get(input.sessionID)
+          return yield* SessionInput.editPrompt(db, events, {
+            sessionID: input.sessionID,
+            id: input.id,
+            prompt: resolvePrompt({ text: input.text }),
+          })
+        }),
+        remove: Effect.fn("V2Session.queue.remove")(function* (input) {
+          yield* result.get(input.sessionID)
+          return yield* SessionInput.removePrompt(db, events, input)
+        }),
+        reorder: Effect.fn("V2Session.queue.reorder")(function* (input) {
+          yield* result.get(input.sessionID)
+          yield* SessionInput.reorderQueue(db, events, input)
+        }),
+        sendNow: Effect.fn("V2Session.queue.sendNow")(function* (input) {
+          yield* result.get(input.sessionID)
+          const promoted = yield* SessionInput.promoteQueued(db, events, input)
+          if (promoted) yield* execution.resume(input.sessionID).pipe(Effect.ignore)
+          return promoted
+        }),
+        policy: Effect.fn("V2Session.queue.policy")(function* (sessionID) {
+          yield* result.get(sessionID)
+          return yield* SessionInput.queuePolicy(db, sessionID)
+        }),
+        setPolicy: Effect.fn("V2Session.queue.setPolicy")(function* (input) {
+          yield* result.get(input.sessionID)
+          yield* SessionInput.setQueuePolicy(db, events, input)
+        }),
+      },
       shell: Effect.fn("V2Session.shell")(function* () {
         return yield* new OperationUnavailableError({ operation: "shell" })
       }),

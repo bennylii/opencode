@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector"
 
-import { and, desc, eq, gt, or, sql } from "drizzle-orm"
+import { and, desc, eq, gt, isNull, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -353,6 +353,7 @@ const layer = Layer.effectDiscard(
           sessionID: event.data.sessionID,
           prompt: event.data.prompt,
           delivery: event.data.delivery,
+          intent: event.data.intent,
           timeCreated: event.data.timestamp,
           promotedSeq: event.durable.seq,
         })
@@ -368,9 +369,71 @@ const layer = Layer.effectDiscard(
           sessionID: event.data.sessionID,
           prompt: event.data.prompt,
           delivery: event.data.delivery,
+          intent: event.data.intent,
           timeCreated: event.data.timestamp,
         })
       }),
+    )
+    yield* events.project(SessionEvent.PromptEdited, (event) =>
+      db
+        .update(SessionInputTable)
+        .set({ prompt: event.data.prompt })
+        .where(
+          and(
+            eq(SessionInputTable.id, event.data.messageID),
+            eq(SessionInputTable.session_id, event.data.sessionID),
+            isNull(SessionInputTable.promoted_seq),
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie, Effect.andThen(run(db, event))),
+    )
+    yield* events.project(SessionEvent.PromptRemoved, (event) =>
+      db
+        .delete(SessionInputTable)
+        .where(
+          and(
+            eq(SessionInputTable.id, event.data.messageID),
+            eq(SessionInputTable.session_id, event.data.sessionID),
+            isNull(SessionInputTable.promoted_seq),
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie, Effect.andThen(run(db, event))),
+    )
+    yield* events.project(SessionEvent.PromptQueueReordered, (event) =>
+      Effect.gen(function* () {
+        yield* Effect.forEach(
+          event.data.messageIDs,
+          (messageID, index) =>
+            db
+              .update(SessionInputTable)
+              .set({ queue_position: index })
+              .where(
+                and(
+                  eq(SessionInputTable.id, messageID),
+                  eq(SessionInputTable.session_id, event.data.sessionID),
+                  isNull(SessionInputTable.promoted_seq),
+                ),
+              )
+              .run()
+              .pipe(Effect.orDie),
+          { discard: true },
+        )
+        yield* run(db, event)
+      }),
+    )
+    yield* events.project(SessionEvent.QueuePolicyChanged, (event) =>
+      db
+        .update(SessionTable)
+        .set({
+          queue_auto_drain: event.data.autoDrain ? 1 : 0,
+          queue_followup_mode: event.data.followupMode,
+          time_updated: DateTime.toEpochMillis(event.data.timestamp),
+        })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie, Effect.andThen(run(db, event))),
     )
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))

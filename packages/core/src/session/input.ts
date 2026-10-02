@@ -1,19 +1,19 @@
 export * as SessionInput from "./input"
 
-import { and, asc, eq, isNull, lte } from "drizzle-orm"
+import { and, asc, eq, isNull, lte, sql } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
-import { Admitted, Delivery } from "@opencode-ai/schema/session-input"
+import { Admitted, Delivery, type Intent } from "@opencode-ai/schema/session-input"
 import type { Database } from "../database/database"
 import type { EventV2 } from "../event"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
-import { SessionInputTable, SessionMessageTable } from "./sql"
+import { SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
 
-export { Admitted, Delivery }
+export { Admitted, Delivery, type Intent }
 
 const decodePrompt = Schema.decodeUnknownSync(Prompt)
 const encodePrompt = Schema.encodeSync(Prompt)
@@ -25,6 +25,7 @@ const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
     sessionID: SessionSchema.ID.make(row.session_id),
     prompt: decodePrompt(row.prompt),
     delivery: row.delivery,
+    ...(row.intent === null ? {} : { intent: row.intent }),
     timeCreated: DateTime.makeUnsafe(row.time_created),
     ...(row.promoted_seq === null ? {} : { promotedSeq: row.promoted_seq }),
   })
@@ -46,6 +47,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly intent?: Intent
   },
 ) {
   const existing = yield* find(db, input.id)
@@ -58,6 +60,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
       timestamp,
       prompt: input.prompt,
       delivery: input.delivery,
+      intent: input.intent,
     })
     .pipe(
       Effect.flatMap((event) =>
@@ -70,6 +73,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
                 sessionID: input.sessionID,
                 prompt: input.prompt,
                 delivery: input.delivery,
+                intent: input.intent,
                 timeCreated: timestamp,
               }),
             ),
@@ -88,6 +92,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly intent?: Intent
     readonly timeCreated: DateTime.Utc
   },
 ) {
@@ -106,6 +111,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
       admitted_seq: input.admittedSeq,
       prompt: encodePrompt(input.prompt),
       delivery: input.delivery,
+      intent: input.intent ?? null,
       time_created: DateTime.toEpochMillis(input.timeCreated),
     })
     .onConflictDoNothing()
@@ -122,6 +128,7 @@ export const projectPrompted = Effect.fn("SessionInput.projectPrompted")(functio
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly intent?: Intent
     readonly timeCreated: DateTime.Utc
     readonly promotedSeq: number
   },
@@ -159,6 +166,7 @@ export const projectPrompted = Effect.fn("SessionInput.projectPrompted")(functio
       session_id: input.sessionID,
       prompt: encodePrompt(input.prompt),
       delivery: input.delivery,
+      intent: input.intent ?? null,
       admitted_seq: input.promotedSeq,
       promoted_seq: input.promotedSeq,
       time_created: DateTime.toEpochMillis(input.timeCreated),
@@ -194,8 +202,16 @@ export const equivalent = (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly intent?: Intent
   },
-) => input.delivery === expected.delivery && matchesPrompt(input, expected)
+) =>
+  input.delivery === expected.delivery &&
+  sameIntent(input.intent, expected.intent) &&
+  matchesPrompt(input, expected)
+
+function sameIntent(left: Intent | undefined, right: Intent | undefined): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
+}
 
 const matchesPrompt = (input: Admitted, expected: { readonly sessionID: SessionSchema.ID; readonly prompt: Prompt }) =>
   input.sessionID === expected.sessionID &&
@@ -207,6 +223,7 @@ const matchesProjection = (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly intent?: Intent
     readonly timeCreated: DateTime.Utc
   },
 ) =>
@@ -228,6 +245,7 @@ const publish = Effect.fn("SessionInput.publish")(function* (
         messageID: id,
         prompt: decodePrompt(row.prompt),
         delivery: row.delivery,
+        intent: row.intent ?? undefined,
       })
       .pipe(
         Effect.catchDefect((defect) =>
@@ -239,7 +257,7 @@ const publish = Effect.fn("SessionInput.publish")(function* (
         ),
       )
   }
-  return rows.length
+  return rows
 })
 
 export const promoteSteers = Effect.fn("SessionInput.promoteSteers")(function* (
@@ -280,9 +298,142 @@ export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(fun
         eq(SessionInputTable.delivery, "queue"),
       ),
     )
-    .orderBy(asc(SessionInputTable.admitted_seq))
+    .orderBy(...queueOrder)
     .limit(1)
     .get()
     .pipe(Effect.orDie)
-  return row === undefined ? false : yield* publish(db, events, sessionID, [row]).pipe(Effect.as(true))
+  return row === undefined ? [] : yield* publish(db, events, sessionID, [row])
+})
+
+/** 待提升输入按显式 queue_position 优先、其余按 admission 顺序。 */
+const queueOrder = [
+  sql`${SessionInputTable.queue_position} IS NULL`,
+  asc(SessionInputTable.queue_position),
+  asc(SessionInputTable.admitted_seq),
+] as const
+
+export const listPending = Effect.fn("SessionInput.listPending")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const rows = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(and(eq(SessionInputTable.session_id, sessionID), isNull(SessionInputTable.promoted_seq)))
+    .orderBy(...queueOrder)
+    .all()
+    .pipe(Effect.orDie)
+  return rows.map(fromRow)
+})
+
+/** 仅允许修改未提升输入的文本；模型/计划/思考强度等属性在 admission 冻结。 */
+export const editPrompt = Effect.fn("SessionInput.editPrompt")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  input: { readonly sessionID: SessionSchema.ID; readonly id: SessionMessage.ID; readonly prompt: Prompt },
+) {
+  const existing = yield* find(db, input.id)
+  if (!existing || existing.sessionID !== input.sessionID || existing.promotedSeq !== undefined) return false
+  yield* events.publish(SessionEvent.PromptEdited, {
+    sessionID: input.sessionID,
+    messageID: input.id,
+    timestamp: yield* DateTime.now,
+    prompt: input.prompt,
+    delivery: existing.delivery,
+    intent: existing.intent,
+  })
+  return true
+})
+
+export const removePrompt = Effect.fn("SessionInput.removePrompt")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  input: { readonly sessionID: SessionSchema.ID; readonly id: SessionMessage.ID },
+) {
+  const existing = yield* find(db, input.id)
+  if (!existing || existing.sessionID !== input.sessionID || existing.promotedSeq !== undefined) return false
+  yield* events.publish(SessionEvent.PromptRemoved, {
+    sessionID: input.sessionID,
+    messageID: input.id,
+    timestamp: yield* DateTime.now,
+  })
+  return true
+})
+
+/** 以完整顺序重写待提升队列；未列出的输入保持原有相对顺序不变。 */
+export const reorderQueue = Effect.fn("SessionInput.reorderQueue")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  input: { readonly sessionID: SessionSchema.ID; readonly messageIDs: ReadonlyArray<SessionMessage.ID> },
+) {
+  yield* events.publish(SessionEvent.PromptQueueReordered, {
+    sessionID: input.sessionID,
+    timestamp: yield* DateTime.now,
+    messageIDs: input.messageIDs,
+  })
+})
+
+/** 立即提升指定的排队输入（send queued now）。 */
+export const promoteQueued = Effect.fn("SessionInput.promoteQueued")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  input: { readonly sessionID: SessionSchema.ID; readonly id: SessionMessage.ID },
+) {
+  const row = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(
+      and(
+        eq(SessionInputTable.id, input.id),
+        eq(SessionInputTable.session_id, input.sessionID),
+        isNull(SessionInputTable.promoted_seq),
+        eq(SessionInputTable.delivery, "queue"),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  if (row === undefined) return false
+  yield* publish(db, events, input.sessionID, [row])
+  return true
+})
+
+export const setQueuePolicy = Effect.fn("SessionInput.setQueuePolicy")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  input: {
+    readonly sessionID: SessionSchema.ID
+    readonly autoDrain: boolean
+    readonly followupMode: "queue" | "guide"
+  },
+) {
+  yield* events.publish(SessionEvent.QueuePolicyChanged, {
+    sessionID: input.sessionID,
+    timestamp: yield* DateTime.now,
+    autoDrain: input.autoDrain,
+    followupMode: input.followupMode,
+  })
+})
+
+export interface QueuePolicy {
+  readonly autoDrain: boolean
+  readonly followupMode: "queue" | "guide"
+}
+
+export const DEFAULT_QUEUE_POLICY: QueuePolicy = { autoDrain: true, followupMode: "queue" }
+
+export const queuePolicy = Effect.fn("SessionInput.queuePolicy")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const row = yield* db
+    .select({ auto: SessionTable.queue_auto_drain, mode: SessionTable.queue_followup_mode })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!row) return DEFAULT_QUEUE_POLICY
+  return {
+    autoDrain: row.auto !== 0,
+    followupMode: row.mode ?? "queue",
+  } satisfies QueuePolicy
 })

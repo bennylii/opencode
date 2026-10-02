@@ -146,6 +146,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 id: ctx.payload.id,
                 prompt: ctx.payload.prompt,
                 delivery: ctx.payload.delivery,
+                intent: ctx.payload.intent,
                 resume: ctx.payload.resume,
               })
               .pipe(
@@ -379,6 +380,137 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             messageID: ctx.params.messageID,
             message: `Message not found: ${ctx.params.messageID}`,
           })
+        }),
+      )
+      .handle(
+        "session.queueList",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.queue.list(ctx.params.sessionID).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
+        "session.queueEdit",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.queue
+              .edit({ sessionID: ctx.params.sessionID, id: ctx.params.messageID, text: ctx.payload.text })
+              .pipe(
+                Effect.catchTag("Session.NotFoundError", (error) =>
+                  Effect.fail(
+                    new SessionNotFoundError({
+                      sessionID: error.sessionID,
+                      message: `Session not found: ${error.sessionID}`,
+                    }),
+                  ),
+                ),
+              ),
+          }
+        }),
+      )
+      .handle(
+        "session.queueRemove",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.queue
+              .remove({ sessionID: ctx.params.sessionID, id: ctx.params.messageID })
+              .pipe(
+                Effect.catchTag("Session.NotFoundError", (error) =>
+                  Effect.fail(
+                    new SessionNotFoundError({
+                      sessionID: error.sessionID,
+                      message: `Session not found: ${error.sessionID}`,
+                    }),
+                  ),
+                ),
+              ),
+          }
+        }),
+      )
+      .handle(
+        "session.queueReorder",
+        Effect.fn(function* (ctx) {
+          yield* session.queue
+            .reorder({ sessionID: ctx.params.sessionID, messageIDs: ctx.payload.messageIDs })
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+            )
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
+        "session.queueSendNow",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.queue
+              .sendNow({ sessionID: ctx.params.sessionID, id: ctx.params.messageID })
+              .pipe(
+                Effect.catchTag("Session.NotFoundError", (error) =>
+                  Effect.fail(
+                    new SessionNotFoundError({
+                      sessionID: error.sessionID,
+                      message: `Session not found: ${error.sessionID}`,
+                    }),
+                  ),
+                ),
+              ),
+          }
+        }),
+      )
+      .handle(
+        "session.queuePolicy",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.queue.policy(ctx.params.sessionID).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
+        "session.queueSetPolicy",
+        Effect.fn(function* (ctx) {
+          yield* session.queue
+            .setPolicy({
+              sessionID: ctx.params.sessionID,
+              autoDrain: ctx.payload.autoDrain,
+              followupMode: ctx.payload.followupMode,
+            })
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+            )
+          return HttpApiSchema.NoContent.make()
         }),
       )
   }),

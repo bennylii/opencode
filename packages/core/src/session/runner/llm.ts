@@ -29,6 +29,7 @@ import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service } from "./index"
@@ -179,24 +180,57 @@ const layer = Layer.effect(
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
-      const agent = yield* agents.select(session.agent)
-      const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(agent), session.id)
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       let currentStep = step
+      // System context 初始化必须先于 promotion：初始化被阻塞时不能消费 pending 输入。
+      const initialAgent = yield* agents.select(session.agent)
+      const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(initialAgent), session.id)
+      // Promotion 在初始化之后：队列项在 admission 冻结的属性（计划/模型/思考强度/
+      // 上下文预算）必须在本 provider turn 生效，并持久化为新的 session 选择。
+      type PromotedIntentRow = { readonly intent: SessionInput.Intent | null }
+      let promotedRows: ReadonlyArray<PromotedIntentRow> = []
       if (promotion) {
         const cutoff = yield* EventV2.latestSequence(db, session.id)
-        let promoted = 0
-        if (promotion === "steer") promoted = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
+        if (promotion === "steer") promotedRows = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
         if (promotion === "queue") {
-          promoted += Number(yield* SessionInput.promoteNextQueued(db, events, session.id))
-          promoted += yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
+          promotedRows = [
+            ...(yield* SessionInput.promoteNextQueued(db, events, session.id)),
+            ...(yield* SessionInput.promoteSteers(db, events, session.id, cutoff)),
+          ]
         }
-        if (promoted > 0) currentStep = 1
+        if (promotedRows.length > 0) currentStep = 1
       }
+      const intent = promotedRows.at(-1)?.intent ?? undefined
+      const intentAgent = intent?.mode
+      const intentModel = intent?.model
+      const intentModelRef = intentModel
+        ? {
+            id: ModelV2.ID.make(intentModel.modelID),
+            providerID: ProviderV2.ID.make(intentModel.providerID),
+            variant: ModelV2.VariantID.make(intentModel.variant ?? "default"),
+          }
+        : undefined
+      if (intentAgent && intentAgent !== session.agent) {
+        yield* events.publish(SessionEvent.AgentSwitched, {
+          sessionID: session.id,
+          messageID: SessionMessage.ID.create(),
+          timestamp: yield* DateTime.now,
+          agent: AgentV2.ID.make(intentAgent),
+        })
+      }
+      if (intentModelRef) {
+        yield* events.publish(SessionEvent.ModelSwitched, {
+          sessionID: session.id,
+          messageID: SessionMessage.ID.create(),
+          timestamp: yield* DateTime.now,
+          model: intentModelRef,
+        })
+      }
+      const agent = intentAgent ? yield* agents.select(intentAgent) : initialAgent
       const system =
         initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id))
-      const model = yield* models.resolve(session)
+      const model = yield* models.resolve(intentModelRef ? { ...session, model: intentModelRef } : session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
@@ -221,7 +255,23 @@ const layer = Layer.effect(
         tools: toolMaterialization?.definitions ?? [],
         toolChoice: isLastStep ? "none" : undefined,
       })
-      if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
+      // 显式上下文预算：把本 turn 的有效 context limit 降到 intent 指定值，
+      // 让自动压缩按该预算触发（历史超预算 → 先摘要/裁剪再继续同一对话）。
+      const contextBudget = intent?.context?.maxInputTokens
+      const compactionModel =
+        contextBudget !== undefined && model.route.defaults.limits
+          ? {
+              ...model,
+              route: {
+                ...model.route,
+                defaults: {
+                  ...model.route.defaults,
+                  limits: { ...model.route.defaults.limits, context: contextBudget },
+                },
+              },
+            }
+          : model
+      if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model: compactionModel, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
       const startSnapshot = yield* snapshots.capture()
       const publisher = createLLMEventPublisher(events, {
@@ -230,7 +280,11 @@ const layer = Layer.effect(
         model: {
           id: ModelV2.ID.make(model.id),
           providerID: ProviderV2.ID.make(model.provider),
-          ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
+          ...(intentModelRef
+            ? { variant: intentModelRef.variant }
+            : session.model?.variant === undefined
+              ? {}
+              : { variant: session.model.variant }),
         },
         snapshot: startSnapshot,
       })
@@ -393,11 +447,17 @@ const layer = Layer.effect(
       readonly sessionID: SessionSchema.ID
       readonly force: boolean
     }) {
+      const policy = yield* SessionInput.queuePolicy(db, input.sessionID)
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
       if (!input.force && !hasSteer && !hasQueue) return
       yield* failInterruptedTools(input.sessionID)
-      let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
+      // autoDrain=false 时队列项只通过显式 sendQueuedNow/resume 提升。
+      let promotion: SessionInput.Delivery | undefined = hasSteer
+        ? "steer"
+        : policy.autoDrain && hasQueue
+          ? "queue"
+          : undefined
       let shouldRun = input.force || hasSteer || hasQueue
       while (shouldRun) {
         let needsContinuation = true
@@ -408,8 +468,19 @@ const layer = Layer.effect(
           step = result.step + 1
           promotion = "steer"
           if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+          // guide 模式：队列项在当前 drain 内继续执行（沿用同一 turn 预算），
+          // 而不是等空闲后开新 turn。
+          if (
+            !needsContinuation &&
+            policy.autoDrain &&
+            policy.followupMode === "guide" &&
+            (yield* SessionInput.hasPending(db, input.sessionID, "queue"))
+          ) {
+            promotion = "queue"
+            needsContinuation = true
+          }
         }
-        shouldRun = yield* SessionInput.hasPending(db, input.sessionID, "queue")
+        shouldRun = policy.autoDrain && (yield* SessionInput.hasPending(db, input.sessionID, "queue"))
         promotion = shouldRun ? "queue" : undefined
       }
     })

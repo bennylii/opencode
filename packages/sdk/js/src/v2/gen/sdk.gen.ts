@@ -195,6 +195,7 @@ import type {
   SessionGetResponses,
   SessionInitErrors,
   SessionInitResponses,
+  SessionInputIntent,
   SessionListErrors,
   SessionListResponses,
   SessionMessageErrors,
@@ -205,6 +206,7 @@ import type {
   SessionPromptAsyncResponses,
   SessionPromptErrors,
   SessionPromptResponses,
+  SessionQueuePolicy,
   SessionRevertErrors,
   SessionRevertResponses,
   SessionShareErrors,
@@ -371,6 +373,20 @@ import type {
   V2SessionQuestionRejectResponses,
   V2SessionQuestionReplyErrors,
   V2SessionQuestionReplyResponses,
+  V2SessionQueueEditErrors,
+  V2SessionQueueEditResponses,
+  V2SessionQueueListErrors,
+  V2SessionQueueListResponses,
+  V2SessionQueuePolicyErrors,
+  V2SessionQueuePolicyResponses,
+  V2SessionQueueRemoveErrors,
+  V2SessionQueueRemoveResponses,
+  V2SessionQueueReorderErrors,
+  V2SessionQueueReorderResponses,
+  V2SessionQueueSendNowErrors,
+  V2SessionQueueSendNowResponses,
+  V2SessionQueueSetPolicyErrors,
+  V2SessionQueueSetPolicyResponses,
   V2SessionRevertClearErrors,
   V2SessionRevertClearResponses,
   V2SessionRevertCommitErrors,
@@ -5083,6 +5099,229 @@ export class Agent extends HeyApiClient {
   }
 }
 
+export class Queue extends HeyApiClient {
+  /**
+   * List queued inputs
+   *
+   * List pending (unpromoted) session inputs in promotion order.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<V2SessionQueueListResponses, V2SessionQueueListErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/queue",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Remove queued input
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      messageID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "messageID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      V2SessionQueueRemoveResponses,
+      V2SessionQueueRemoveErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/queue/{messageID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Edit queued input text
+   *
+   * Edit the text of an unpromoted queued input. Frozen attributes are unchanged.
+   */
+  public edit<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      messageID: string
+      text?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "messageID" },
+            { in: "body", key: "text" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<V2SessionQueueEditResponses, V2SessionQueueEditErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/queue/{messageID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Reorder queued inputs
+   *
+   * Rewrite the pending queue order; unlisted inputs keep their relative order.
+   */
+  public reorder<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      messageIDs?: Array<string>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "messageIDs" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionQueueReorderResponses,
+      V2SessionQueueReorderErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/queue/reorder",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Send queued input now
+   *
+   * Promote one queued input immediately and resume execution without waiting for idle.
+   */
+  public sendNow<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      messageID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "messageID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionQueueSendNowResponses,
+      V2SessionQueueSendNowErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/queue/{messageID}/send",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read queue policy
+   */
+  public policy<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<
+      V2SessionQueuePolicyResponses,
+      V2SessionQueuePolicyErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/queue/policy",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update queue policy
+   *
+   * autoDrain=false keeps queued inputs pending until sendNow/resume; followupMode=guide continues within the same drain.
+   */
+  public setPolicy<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      sessionQueuePolicy: SessionQueuePolicy
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { key: "sessionQueuePolicy", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<
+      V2SessionQueueSetPolicyResponses,
+      V2SessionQueueSetPolicyErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/queue/policy",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Revert extends HeyApiClient {
   /**
    * Stage session revert
@@ -5625,6 +5864,7 @@ export class Session3 extends HeyApiClient {
       id?: string
       prompt?: PromptInput
       delivery?: "steer" | "queue"
+      intent?: SessionInputIntent
       resume?: boolean
     },
     options?: Options<never, ThrowOnError>,
@@ -5638,6 +5878,7 @@ export class Session3 extends HeyApiClient {
             { in: "body", key: "id" },
             { in: "body", key: "prompt" },
             { in: "body", key: "delivery" },
+            { in: "body", key: "intent" },
             { in: "body", key: "resume" },
           ],
         },
@@ -5855,6 +6096,11 @@ export class Session3 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _queue?: Queue
+  get queue(): Queue {
+    return (this._queue ??= new Queue({ client: this.client }))
   }
 
   private _revert?: Revert

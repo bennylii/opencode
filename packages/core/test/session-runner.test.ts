@@ -2093,6 +2093,144 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("guide follow-up mode drains queued inputs within the same turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Start working" }), resume: false })
+      yield* session.queue.setPolicy({ sessionID, autoDrain: true, followupMode: "guide" })
+
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+
+      const first = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Guide followup" }), delivery: "queue" })
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(first)
+      streamGate = undefined
+      streamStarted = undefined
+
+      expect(requests).toHaveLength(2)
+      expect(userTexts(requests[0]!)).toEqual(["Start working"])
+      expect(userTexts(requests[1]!)).toEqual(["Start working", "Guide followup"])
+      expect(yield* session.queue.list(sessionID)).toEqual([])
+    }),
+  )
+
+  it.effect("applies a queued input's frozen intent on promotion", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Start working" }), resume: false })
+
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Queue with intent" }),
+        delivery: "queue",
+        resume: false,
+        intent: {
+          mode: "plan",
+          model: { providerID: "fake", modelID: "replacement", variant: "high" },
+          context: { maxInputTokens: 100_000 },
+        },
+      })
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(String(requests[1]!.model.id)).toBe("replacement")
+      const info = yield* session.get(sessionID)
+      expect(String(info.agent)).toBe("plan")
+      expect(String(info.model?.id)).toBe("replacement")
+      expect(String(info.model?.variant)).toBe("high")
+    }),
+  )
+
+  it.effect("leaves queued inputs pending when autoDrain is disabled", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Start working" }), resume: false })
+      yield* session.queue.setPolicy({ sessionID, autoDrain: false, followupMode: "queue" })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Queue later" }), delivery: "queue", resume: false })
+
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toEqual(["Start working"])
+      const pending = yield* session.queue.list(sessionID)
+      expect(pending.map((item) => item.prompt.text)).toEqual(["Queue later"])
+    }),
+  )
+
+  it.effect("sendNow promotes one queued input under manual drain", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.queue.setPolicy({ sessionID, autoDrain: false, followupMode: "queue" })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Manual A" }), delivery: "queue", resume: false })
+      const second = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Manual B" }),
+        delivery: "queue",
+        resume: false,
+      })
+
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      expect(yield* session.queue.sendNow({ sessionID, id: second.id })).toBe(true)
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toEqual(["Manual B"])
+      const pending = yield* session.queue.list(sessionID)
+      expect(pending.map((item) => item.prompt.text)).toEqual(["Manual A"])
+    }),
+  )
+
   it.effect("promotes queued input after steering continuation ends", () =>
     Effect.gen(function* () {
       yield* setup

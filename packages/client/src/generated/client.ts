@@ -17,6 +17,20 @@ import type {
   SessionsSwitchModelOutput,
   SessionsPromptInput,
   SessionsPromptOutput,
+  SessionsQueueListInput,
+  SessionsQueueListOutput,
+  SessionsQueueEditInput,
+  SessionsQueueEditOutput,
+  SessionsQueueRemoveInput,
+  SessionsQueueRemoveOutput,
+  SessionsQueueReorderInput,
+  SessionsQueueReorderOutput,
+  SessionsQueueSendNowInput,
+  SessionsQueueSendNowOutput,
+  SessionsQueuePolicyInput,
+  SessionsQueuePolicyOutput,
+  SessionsQueueSetPolicyInput,
+  SessionsQueueSetPolicyOutput,
   SessionsCompactInput,
   SessionsCompactOutput,
   SessionsWaitInput,
@@ -372,13 +386,99 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/prompt`,
-            body: { id: input["id"], prompt: input["prompt"], delivery: input["delivery"], resume: input["resume"] },
+            body: {
+              id: input["id"],
+              prompt: input["prompt"],
+              delivery: input["delivery"],
+              intent: input["intent"],
+              resume: input["resume"],
+            },
             successStatus: 200,
             declaredStatuses: [409, 404, 400, 401],
             empty: false,
           },
           requestOptions,
         ).then((value) => value.data),
+      queueList: (input: SessionsQueueListInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsQueueListOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      queueEdit: (input: SessionsQueueEditInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsQueueEditOutput }>(
+          {
+            method: "PATCH",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/${encodeURIComponent(input.messageID)}`,
+            body: { text: input["text"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      queueRemove: (input: SessionsQueueRemoveInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsQueueRemoveOutput }>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/${encodeURIComponent(input.messageID)}`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      queueReorder: (input: SessionsQueueReorderInput, requestOptions?: RequestOptions) =>
+        request<SessionsQueueReorderOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/reorder`,
+            body: { messageIDs: input["messageIDs"] },
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      queueSendNow: (input: SessionsQueueSendNowInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsQueueSendNowOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/${encodeURIComponent(input.messageID)}/send`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      queuePolicy: (input: SessionsQueuePolicyInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsQueuePolicyOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/policy`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      queueSetPolicy: (input: SessionsQueueSetPolicyInput, requestOptions?: RequestOptions) =>
+        request<SessionsQueueSetPolicyOutput>(
+          {
+            method: "PUT",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/policy`,
+            body: { autoDrain: input["autoDrain"], followupMode: input["followupMode"] },
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
       compact: (input: SessionsCompactInput, requestOptions?: RequestOptions) =>
         request<SessionsCompactOutput>(
           {

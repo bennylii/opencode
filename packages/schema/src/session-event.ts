@@ -5,6 +5,7 @@ import { optional } from "./schema"
 import { Event } from "./event"
 import { ProviderMetadata, ToolContent } from "./llm"
 import { Delivery } from "./session-delivery"
+import { Intent } from "./session-input"
 import { Model } from "./model"
 import { DateTimeUtcFromMillis, NonNegativeInt, RelativePath } from "./schema"
 import { FileAttachment, Prompt } from "./prompt"
@@ -33,6 +34,7 @@ const PromptFields = {
   messageID: SessionMessage.ID,
   prompt: Prompt,
   delivery: Delivery,
+  intent: Intent.pipe(optional),
 }
 
 const options = {
@@ -97,6 +99,45 @@ export const PromptAdmitted = Event.define({
   schema: PromptFields,
 })
 export type PromptAdmitted = typeof PromptAdmitted.Type
+
+// ── 队列管理（仅未提升的输入可编辑/删除/重排）─────────────────────────────
+export const PromptEdited = Event.define({
+  type: "session.next.prompt.edited",
+  ...options,
+  schema: PromptFields,
+})
+export type PromptEdited = typeof PromptEdited.Type
+
+export const PromptRemoved = Event.define({
+  type: "session.next.prompt.removed",
+  ...options,
+  schema: {
+    ...Base,
+    messageID: SessionMessage.ID,
+  },
+})
+export type PromptRemoved = typeof PromptRemoved.Type
+
+export const PromptQueueReordered = Event.define({
+  type: "session.next.prompt.queue.reordered",
+  ...options,
+  schema: {
+    ...Base,
+    messageIDs: Schema.Array(SessionMessage.ID),
+  },
+})
+export type PromptQueueReordered = typeof PromptQueueReordered.Type
+
+export const QueuePolicyChanged = Event.define({
+  type: "session.next.queue.policy",
+  ...options,
+  schema: {
+    ...Base,
+    autoDrain: Schema.Boolean,
+    followupMode: Schema.Literals(["queue", "guide"]),
+  },
+})
+export type QueuePolicyChanged = typeof QueuePolicyChanged.Type
 
 export const ContextUpdated = Event.define({
   type: "session.next.context.updated",
@@ -451,6 +492,10 @@ export const DurableDefinitions = Event.inventory(
   Moved,
   Prompted,
   PromptAdmitted,
+  PromptEdited,
+  PromptRemoved,
+  PromptQueueReordered,
+  QueuePolicyChanged,
   ContextUpdated,
   Synthetic,
   Shell.Started,
@@ -482,6 +527,10 @@ export const Definitions = Event.inventory(
   Moved,
   Prompted,
   PromptAdmitted,
+  PromptEdited,
+  PromptRemoved,
+  PromptQueueReordered,
+  QueuePolicyChanged,
   ContextUpdated,
   Synthetic,
   Shell.Started,

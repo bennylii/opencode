@@ -21,6 +21,10 @@ export type Event =
   | EventSessionNextMoved
   | EventSessionNextPrompted
   | EventSessionNextPromptAdmitted
+  | EventSessionNextPromptEdited
+  | EventSessionNextPromptRemoved
+  | EventSessionNextPromptQueueReordered
+  | EventSessionNextQueuePolicy
   | EventSessionNextContextUpdated
   | EventSessionNextSynthetic
   | EventSessionNextShellStarted
@@ -857,6 +861,7 @@ export type GlobalEvent = {
           messageID: string
           prompt: Prompt
           delivery: "steer" | "queue"
+          intent?: SessionInputIntent
         }
       }
     | {
@@ -868,6 +873,47 @@ export type GlobalEvent = {
           messageID: string
           prompt: Prompt
           delivery: "steer" | "queue"
+          intent?: SessionInputIntent
+        }
+      }
+    | {
+        id: string
+        type: "session.next.prompt.edited"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          prompt: Prompt
+          delivery: "steer" | "queue"
+          intent?: SessionInputIntent
+        }
+      }
+    | {
+        id: string
+        type: "session.next.prompt.removed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.prompt.queue.reordered"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageIDs: Array<string>
+        }
+      }
+    | {
+        id: string
+        type: "session.next.queue.policy"
+        properties: {
+          timestamp: number
+          sessionID: string
+          autoDrain: boolean
+          followupMode: "queue" | "guide"
         }
       }
     | {
@@ -1613,6 +1659,10 @@ export type GlobalEvent = {
     | SyncEventSessionNextMoved
     | SyncEventSessionNextPrompted
     | SyncEventSessionNextPromptAdmitted
+    | SyncEventSessionNextPromptEdited
+    | SyncEventSessionNextPromptRemoved
+    | SyncEventSessionNextPromptQueueReordered
+    | SyncEventSessionNextQueuePolicy
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionNextSynthetic
     | SyncEventSessionNextShellStarted
@@ -1677,6 +1727,7 @@ export type PermissionConfig =
       question?: PermissionActionConfig
       webfetch?: PermissionActionConfig
       websearch?: PermissionActionConfig
+      browser?: PermissionActionConfig
       lsp?: PermissionRuleConfig
       doom_loop?: PermissionActionConfig
       skill?: PermissionRuleConfig
@@ -2720,6 +2771,11 @@ export type ConflictError = {
   resource?: string
 }
 
+export type SessionQueuePolicy = {
+  autoDrain: boolean
+  followupMode: "queue" | "guide"
+}
+
 export type ServiceUnavailableError = {
   _tag: "ServiceUnavailableError"
   message: string
@@ -2745,6 +2801,10 @@ export type SessionDurableEvent =
   | SessionNextMoved
   | SessionNextPrompted
   | SessionNextPromptAdmitted
+  | SessionNextPromptEdited
+  | SessionNextPromptRemoved
+  | SessionNextPromptQueueReordered
+  | SessionNextQueuePolicy
   | SessionNextContextUpdated
   | SessionNextSynthetic
   | SessionNextShellStarted
@@ -2872,6 +2932,10 @@ export type V2Event =
   | SessionNextMoved
   | SessionNextPrompted
   | SessionNextPromptAdmitted
+  | SessionNextPromptEdited
+  | SessionNextPromptRemoved
+  | SessionNextPromptQueueReordered
+  | SessionNextQueuePolicy
   | SessionNextContextUpdated
   | SessionNextSynthetic
   | SessionNextShellStarted
@@ -3066,6 +3130,18 @@ export type PromptFileAttachment = {
 export type PromptAgentAttachment = {
   name: string
   source?: PromptSource
+}
+
+export type SessionInputIntent = {
+  mode?: "build" | "edit" | "plan" | "yolo"
+  model?: {
+    providerID: string
+    modelID: string
+    variant?: string
+  }
+  context?: {
+    maxInputTokens: number
+  }
 }
 
 export type SessionErrorUnknown = {
@@ -3366,6 +3442,7 @@ export type SyncEventSessionNextPrompted = {
       messageID: string
       prompt: Prompt
       delivery: "steer" | "queue"
+      intent?: SessionInputIntent
     }
   }
 }
@@ -3384,6 +3461,75 @@ export type SyncEventSessionNextPromptAdmitted = {
       messageID: string
       prompt: Prompt
       delivery: "steer" | "queue"
+      intent?: SessionInputIntent
+    }
+  }
+}
+
+export type SyncEventSessionNextPromptEdited = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.prompt.edited.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      prompt: Prompt
+      delivery: "steer" | "queue"
+      intent?: SessionInputIntent
+    }
+  }
+}
+
+export type SyncEventSessionNextPromptRemoved = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.prompt.removed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+    }
+  }
+}
+
+export type SyncEventSessionNextPromptQueueReordered = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.prompt.queue.reordered.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageIDs: Array<string>
+    }
+  }
+}
+
+export type SyncEventSessionNextQueuePolicy = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.queue.policy.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      autoDrain: boolean
+      followupMode: "queue" | "guide"
     }
   }
 }
@@ -3930,6 +4076,10 @@ export type SessionV2Info = {
   location: LocationRef
   subpath?: string
   revert?: RevertState
+  queue?: {
+    autoDrain: boolean
+    followupMode: "queue" | "guide"
+  }
 }
 
 export type PromptInputFileAttachment = {
@@ -3945,6 +4095,7 @@ export type SessionInputAdmitted = {
   sessionID: string
   prompt: Prompt
   delivery: "steer" | "queue"
+  intent?: SessionInputIntent
   timeCreated: number
   promotedSeq?: number
 }
@@ -4243,6 +4394,7 @@ export type SessionNextPrompted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    intent?: SessionInputIntent
   }
 }
 
@@ -4264,6 +4416,87 @@ export type SessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    intent?: SessionInputIntent
+  }
+}
+
+export type SessionNextPromptEdited = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.prompt.edited"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    prompt: Prompt
+    delivery: "steer" | "queue"
+    intent?: SessionInputIntent
+  }
+}
+
+export type SessionNextPromptRemoved = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.prompt.removed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+  }
+}
+
+export type SessionNextPromptQueueReordered = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.prompt.queue.reordered"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageIDs: Array<string>
+  }
+}
+
+export type SessionNextQueuePolicy = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.queue.policy"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    autoDrain: boolean
+    followupMode: "queue" | "guide"
   }
 }
 
@@ -6293,6 +6526,7 @@ export type EventSessionNextPrompted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    intent?: SessionInputIntent
   }
 }
 
@@ -6305,6 +6539,51 @@ export type EventSessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    intent?: SessionInputIntent
+  }
+}
+
+export type EventSessionNextPromptEdited = {
+  id: string
+  type: "session.next.prompt.edited"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    prompt: Prompt
+    delivery: "steer" | "queue"
+    intent?: SessionInputIntent
+  }
+}
+
+export type EventSessionNextPromptRemoved = {
+  id: string
+  type: "session.next.prompt.removed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+  }
+}
+
+export type EventSessionNextPromptQueueReordered = {
+  id: string
+  type: "session.next.prompt.queue.reordered"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageIDs: Array<string>
+  }
+}
+
+export type EventSessionNextQueuePolicy = {
+  id: string
+  type: "session.next.queue.policy"
+  properties: {
+    timestamp: number
+    sessionID: string
+    autoDrain: boolean
+    followupMode: "queue" | "guide"
   }
 }
 
@@ -11558,6 +11837,7 @@ export type V2SessionPromptData = {
     id?: string
     prompt: PromptInput
     delivery?: "steer" | "queue"
+    intent?: SessionInputIntent
     resume?: boolean
   }
   path: {
@@ -11598,6 +11878,268 @@ export type V2SessionPromptResponses = {
 }
 
 export type V2SessionPromptResponse = V2SessionPromptResponses[keyof V2SessionPromptResponses]
+
+export type V2SessionQueueListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue"
+}
+
+export type V2SessionQueueListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionQueueListError = V2SessionQueueListErrors[keyof V2SessionQueueListErrors]
+
+export type V2SessionQueueListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: Array<SessionInputAdmitted>
+  }
+}
+
+export type V2SessionQueueListResponse = V2SessionQueueListResponses[keyof V2SessionQueueListResponses]
+
+export type V2SessionQueueRemoveData = {
+  body?: never
+  path: {
+    sessionID: string
+    messageID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/{messageID}"
+}
+
+export type V2SessionQueueRemoveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionQueueRemoveError = V2SessionQueueRemoveErrors[keyof V2SessionQueueRemoveErrors]
+
+export type V2SessionQueueRemoveResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: boolean
+  }
+}
+
+export type V2SessionQueueRemoveResponse = V2SessionQueueRemoveResponses[keyof V2SessionQueueRemoveResponses]
+
+export type V2SessionQueueEditData = {
+  body: {
+    text: string
+  }
+  path: {
+    sessionID: string
+    messageID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/{messageID}"
+}
+
+export type V2SessionQueueEditErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionQueueEditError = V2SessionQueueEditErrors[keyof V2SessionQueueEditErrors]
+
+export type V2SessionQueueEditResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: boolean
+  }
+}
+
+export type V2SessionQueueEditResponse = V2SessionQueueEditResponses[keyof V2SessionQueueEditResponses]
+
+export type V2SessionQueueReorderData = {
+  body: {
+    messageIDs: Array<string>
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/reorder"
+}
+
+export type V2SessionQueueReorderErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionQueueReorderError = V2SessionQueueReorderErrors[keyof V2SessionQueueReorderErrors]
+
+export type V2SessionQueueReorderResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionQueueReorderResponse = V2SessionQueueReorderResponses[keyof V2SessionQueueReorderResponses]
+
+export type V2SessionQueueSendNowData = {
+  body?: never
+  path: {
+    sessionID: string
+    messageID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/{messageID}/send"
+}
+
+export type V2SessionQueueSendNowErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionQueueSendNowError = V2SessionQueueSendNowErrors[keyof V2SessionQueueSendNowErrors]
+
+export type V2SessionQueueSendNowResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: boolean
+  }
+}
+
+export type V2SessionQueueSendNowResponse = V2SessionQueueSendNowResponses[keyof V2SessionQueueSendNowResponses]
+
+export type V2SessionQueuePolicyData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/policy"
+}
+
+export type V2SessionQueuePolicyErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionQueuePolicyError = V2SessionQueuePolicyErrors[keyof V2SessionQueuePolicyErrors]
+
+export type V2SessionQueuePolicyResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionQueuePolicy
+  }
+}
+
+export type V2SessionQueuePolicyResponse = V2SessionQueuePolicyResponses[keyof V2SessionQueuePolicyResponses]
+
+export type V2SessionQueueSetPolicyData = {
+  body: SessionQueuePolicy
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/policy"
+}
+
+export type V2SessionQueueSetPolicyErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionQueueSetPolicyError = V2SessionQueueSetPolicyErrors[keyof V2SessionQueueSetPolicyErrors]
+
+export type V2SessionQueueSetPolicyResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionQueueSetPolicyResponse = V2SessionQueueSetPolicyResponses[keyof V2SessionQueueSetPolicyResponses]
 
 export type V2SessionCompactData = {
   body?: never

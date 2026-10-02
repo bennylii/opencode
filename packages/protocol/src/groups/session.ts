@@ -103,6 +103,11 @@ export const SessionsQuery = Schema.Struct({
   cursor: SessionsQueryCursor.pipe(Schema.optional),
 }).annotate({ identifier: "SessionsQuery" })
 
+export const QueuePolicy = Schema.Struct({
+  autoDrain: Schema.Boolean,
+  followupMode: Schema.Union([Schema.Literal("queue"), Schema.Literal("guide")]),
+}).annotate({ identifier: "SessionQueuePolicy" })
+
 export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLocationMiddleware: Context.Key<I, S>) =>
   HttpApiGroup.make("server.session")
     .add(
@@ -208,6 +213,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           id: SessionMessage.ID.pipe(Schema.optional),
           prompt: PromptInput.Prompt,
           delivery: SessionInput.Delivery.pipe(Schema.optional),
+          intent: SessionInput.Intent.pipe(Schema.optional),
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInput.Admitted }),
@@ -219,6 +225,112 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "v2.session.prompt",
             summary: "Send message",
             description: "Durably admit one session input and schedule agent-loop execution unless resume is false.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.queueList", "/api/session/:sessionID/queue", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Schema.Array(SessionInput.Admitted) }),
+        error: [SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.queue.list",
+            summary: "List queued inputs",
+            description: "List pending (unpromoted) session inputs in promotion order.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.patch("session.queueEdit", "/api/session/:sessionID/queue/:messageID", {
+        params: { sessionID: Session.ID, messageID: SessionMessage.ID },
+        payload: Schema.Struct({ text: Schema.String }),
+        success: Schema.Struct({ data: Schema.Boolean }),
+        error: [SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.queue.edit",
+            summary: "Edit queued input text",
+            description: "Edit the text of an unpromoted queued input. Frozen attributes are unchanged.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.delete("session.queueRemove", "/api/session/:sessionID/queue/:messageID", {
+        params: { sessionID: Session.ID, messageID: SessionMessage.ID },
+        success: Schema.Struct({ data: Schema.Boolean }),
+        error: [SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.queue.remove",
+            summary: "Remove queued input",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.queueReorder", "/api/session/:sessionID/queue/reorder", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ messageIDs: Schema.Array(SessionMessage.ID) }),
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.queue.reorder",
+            summary: "Reorder queued inputs",
+            description: "Rewrite the pending queue order; unlisted inputs keep their relative order.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.queueSendNow", "/api/session/:sessionID/queue/:messageID/send", {
+        params: { sessionID: Session.ID, messageID: SessionMessage.ID },
+        success: Schema.Struct({ data: Schema.Boolean }),
+        error: [SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.queue.sendNow",
+            summary: "Send queued input now",
+            description: "Promote one queued input immediately and resume execution without waiting for idle.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.queuePolicy", "/api/session/:sessionID/queue/policy", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: QueuePolicy }),
+        error: [SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.queue.policy",
+            summary: "Read queue policy",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.put("session.queueSetPolicy", "/api/session/:sessionID/queue/policy", {
+        params: { sessionID: Session.ID },
+        payload: QueuePolicy,
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.queue.setPolicy",
+            summary: "Update queue policy",
+            description: "autoDrain=false keeps queued inputs pending until sendNow/resume; followupMode=guide continues within the same drain.",
           }),
         ),
     )

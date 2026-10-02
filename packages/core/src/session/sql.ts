@@ -54,6 +54,8 @@ export const SessionTable = sqliteTable(
       providerID: string
       variant?: string
     }>(),
+    queue_auto_drain: integer(),
+    queue_followup_mode: text().$type<"queue" | "guide">(),
     ...Timestamps,
     time_compacting: integer(),
     time_archived: integer(),
@@ -147,6 +149,8 @@ export const SessionInputTable = sqliteTable(
       .references(() => SessionTable.id, { onDelete: "cascade" }),
     prompt: text({ mode: "json" }).notNull().$type<Prompt>(),
     delivery: text().$type<SessionInput.Delivery>().notNull(),
+    intent: text({ mode: "json" }).$type<SessionInput.Intent | null>(),
+    queue_position: integer(),
     admitted_seq: integer().notNull(),
     promoted_seq: integer(),
     time_created: integer()

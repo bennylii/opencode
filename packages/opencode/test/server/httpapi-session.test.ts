@@ -637,6 +637,76 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "manages v2 queued inputs over HTTP",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const session = yield* createSession({ title: "v2 queue" })
+
+        const enqueue = (id: string, text: string) =>
+          request(`/api/session/${session.id}/prompt`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ id, prompt: { text }, delivery: "queue", resume: false }),
+          })
+        expect((yield* enqueue("msg_queue_a", "first")).status).toBe(200)
+        expect((yield* enqueue("msg_queue_b", "second")).status).toBe(200)
+
+        type QueueBody = { data: Array<{ id: string; prompt: { text: string } }> }
+        const listed = yield* requestJson<QueueBody>(`/api/session/${session.id}/queue`, { headers })
+        expect(listed.data.map((item) => item.prompt.text)).toEqual(["first", "second"])
+
+        const edit = yield* request(`/api/session/${session.id}/queue/msg_queue_a`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ text: "first edited" }),
+        })
+        expect(edit.status).toBe(200)
+        expect(yield* responseJson(edit)).toEqual({ data: true })
+
+        const reorder = yield* request(`/api/session/${session.id}/queue/reorder`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ messageIDs: ["msg_queue_b", "msg_queue_a"] }),
+        })
+        expect(reorder.status).toBe(204)
+        const reordered = yield* requestJson<QueueBody>(`/api/session/${session.id}/queue`, { headers })
+        expect(reordered.data.map((item) => item.id)).toEqual(["msg_queue_b", "msg_queue_a"])
+        expect(reordered.data[1]?.prompt.text).toBe("first edited")
+
+        const policy = yield* request(`/api/session/${session.id}/queue/policy`, {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ autoDrain: false, followupMode: "guide" }),
+        })
+        expect(policy.status).toBe(204)
+        const policyBody = yield* requestJson<{ data: { autoDrain: boolean; followupMode: string } }>(
+          `/api/session/${session.id}/queue/policy`,
+          { headers },
+        )
+        expect(policyBody.data).toEqual({ autoDrain: false, followupMode: "guide" })
+
+        const removed = yield* request(`/api/session/${session.id}/queue/msg_queue_b`, {
+          method: "DELETE",
+          headers,
+        })
+        expect(removed.status).toBe(200)
+        expect(yield* responseJson(removed)).toEqual({ data: true })
+
+        const send = yield* request(`/api/session/${session.id}/queue/msg_queue_a/send`, {
+          method: "POST",
+          headers,
+        })
+        expect(send.status).toBe(200)
+        expect(yield* responseJson(send)).toEqual({ data: true })
+        const remaining = yield* requestJson<QueueBody>(`/api/session/${session.id}/queue`, { headers })
+        expect(remaining.data).toEqual([])
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
     "returns v2 public unavailable errors for unfinished session mutations",
     () =>
       Effect.gen(function* () {
