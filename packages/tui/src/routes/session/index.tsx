@@ -52,6 +52,8 @@ import { DialogConfirm } from "../../ui/dialog-confirm"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
+import { DialogQueue } from "../../component/dialog-queue"
+import { DialogPlan } from "../../component/dialog-plan"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { filetype } from "../../util/filetype"
@@ -118,6 +120,7 @@ const sessionBindingCommands = [
   "session.timeline",
   "session.fork",
   "session.compact",
+  "session.queued_prompts",
   "session.unshare",
   "session.undo",
   "session.redo",
@@ -512,6 +515,28 @@ export function Session() {
       },
       run: () => {
         dialog.replace(() => <DialogSessionRename session={route.sessionID} />)
+      },
+    },
+    {
+      title: "Manage queued prompts",
+      value: "session.queued_prompts",
+      category: "Session",
+      slash: {
+        name: "queue",
+      },
+      run: () => {
+        dialog.replace(() => <DialogQueue sessionID={route.sessionID} />)
+      },
+    },
+    {
+      title: "View plan progress",
+      value: "session.plan",
+      category: "Session",
+      slash: {
+        name: "plan",
+      },
+      run: () => {
+        dialog.replace(() => <DialogPlan sessionID={route.sessionID} />)
       },
     },
     {
