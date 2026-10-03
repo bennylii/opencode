@@ -54,6 +54,7 @@ import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { DialogQueue } from "../../component/dialog-queue"
 import { DialogPlan } from "../../component/dialog-plan"
+import { DialogPrompt } from "../../ui/dialog-prompt"
 import { useData } from "../../context/data"
 import { projectSessionMessages } from "../../util/session-v2"
 import { Sidebar } from "./sidebar"
@@ -327,7 +328,10 @@ export function Session() {
       const v2 = await sdk.client.v2.session.get({ sessionID }).then((result) => result.data?.data, () => undefined)
       if (route.sessionID === sessionID) {
         setSessionRuntime(v2?.runtime ?? "v1")
-        if (v2?.runtime === "v2") await data.session.message.refresh(sessionID)
+        if (v2?.runtime === "v2") {
+          await data.session.refresh(sessionID)
+          await data.session.message.refresh(sessionID)
+        }
       }
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
@@ -552,6 +556,29 @@ export function Session() {
       },
       run: () => {
         dialog.replace(() => <DialogPlan sessionID={route.sessionID} />)
+      },
+    },
+    {
+      title: "Set context budget",
+      value: "session.budget",
+      category: "Session",
+      slash: {
+        name: "budget",
+      },
+      run: async () => {
+        const current = kv.get("context_budget", 0)
+        const value = await DialogPrompt.show(dialog, "Context budget (tokens, 0 clears)", {
+          value: current > 0 ? String(current) : "",
+          placeholder: "e.g. 400000",
+        })
+        if (value === null) return
+        const parsed = Number.parseInt(value.trim(), 10)
+        const next = Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+        kv.set("context_budget", next)
+        toast.show({
+          message: next > 0 ? `Context budget set to ${next} tokens` : "Context budget cleared",
+          variant: "info",
+        })
       },
     },
     {

@@ -47,6 +47,7 @@ import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
+import { useData } from "../../context/data"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
@@ -171,6 +172,8 @@ export function Prompt(props: PromptProps) {
   const dimensions = useTerminalDimensions()
   const { theme, syntax } = useTheme()
   const kv = useKV()
+  const data = useData()
+  const [contextBudget] = kv.signal<number>("context_budget", 0)
   const animationsEnabled = createMemo(() => kv.get("animations_enabled", true))
   const list = createMemo(() => props.placeholders?.normal ?? [])
   const shell = createMemo(() => props.placeholders?.shell ?? [])
@@ -988,6 +991,7 @@ export function Prompt(props: PromptProps) {
 
     const variant = local.model.variant.current()
     let sessionID = props.sessionID
+    let createdRuntime: "v2" | undefined
     let finishMoveProgress = false
     if (sessionID == null) {
       const selectedWorkspace = workspace.selection()
@@ -997,9 +1001,8 @@ export function Prompt(props: PromptProps) {
       if (move.pending() && !directory) return false
       finishMoveProgress = Boolean(move.progress())
 
-      const res = await sdk.client.session.create({
-        directory,
-        workspace: workspaceID,
+      const res = await sdk.client.v2.session.create({
+        ...(directory ? { location: { directory, ...(workspaceID ? { workspaceID } : {}) } } : {}),
         agent: agent.name,
         model: {
           providerID: selectedModel.providerID,
@@ -1020,7 +1023,8 @@ export function Prompt(props: PromptProps) {
         return true
       }
 
-      sessionID = res.data.id
+      sessionID = res.data.data.id
+      createdRuntime = "v2"
     }
 
     const inputText = expandTrackedPastedText(
@@ -1056,17 +1060,23 @@ export function Prompt(props: PromptProps) {
           ]
         : []
 
+    const runtime = createdRuntime ?? data.session.get(sessionID)?.runtime ?? "v1"
+
     if (store.mode === "shell") {
       move.startSubmit()
-      void sdk.client.session.shell({
-        sessionID,
-        agent: agent.name,
-        model: {
-          providerID: selectedModel.providerID,
-          modelID: selectedModel.modelID,
-        },
-        command: inputText,
-      })
+      if (runtime === "v2") {
+        toast.show({ message: "Shell mode is not available for v2 sessions yet", variant: "warning" })
+      } else {
+        void sdk.client.session.shell({
+          sessionID,
+          agent: agent.name,
+          model: {
+            providerID: selectedModel.providerID,
+            modelID: selectedModel.modelID,
+          },
+          command: inputText,
+        })
+      }
       setStore("mode", "normal")
     } else if (
       inputText.startsWith("/") &&
@@ -1080,43 +1090,88 @@ export function Prompt(props: PromptProps) {
       const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
-      void sdk.client.session.command({
-        sessionID,
-        command: command.slice(1),
-        arguments: args,
-        agent: agent.name,
-        model: `${selectedModel.providerID}/${selectedModel.modelID}`,
-        variant,
-        parts: nonTextParts.filter((x) => x.type === "file"),
-      })
+      if (runtime === "v2") {
+        toast.show({ message: "Slash commands are not available for v2 sessions yet", variant: "warning" })
+      } else {
+        void sdk.client.session.command({
+          sessionID,
+          command: command.slice(1),
+          arguments: args,
+          agent: agent.name,
+          model: `${selectedModel.providerID}/${selectedModel.modelID}`,
+          variant,
+          parts: nonTextParts.filter((x) => x.type === "file"),
+        })
+      }
     } else {
       move.startSubmit()
-      sdk.client.session
-        .prompt(
-          {
-            sessionID,
-            ...selectedModel,
-            agent: agent.name,
-            model: selectedModel,
-            variant,
-            parts: [
-              ...editorParts,
-              {
-                type: "text",
-                text: inputText,
-              },
-              ...nonTextParts,
-            ],
-          },
-          { throwOnError: true },
+      if (runtime === "v2") {
+        const editorText = editorParts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
+        const files = nonTextParts.flatMap((part) =>
+          part.type === "file" ? [{ uri: part.url, mime: part.mime, name: part.filename }] : [],
         )
-        .catch((error) => {
-          toast.show({
-            title: "Failed to send prompt",
-            message: errorMessage(error),
-            variant: "error",
+        const agents = nonTextParts.flatMap((part) => (part.type === "agent" ? [{ name: part.name }] : []))
+        const budget = contextBudget()
+        const intentMode = ["build", "edit", "plan", "yolo"].includes(agent.name)
+          ? (agent.name as "build" | "edit" | "plan" | "yolo")
+          : undefined
+        sdk.client.v2.session
+          .prompt(
+            {
+              sessionID,
+              prompt: {
+                text: editorText ? `${editorText}\n\n${inputText}` : inputText,
+                ...(files.length > 0 ? { files } : {}),
+                ...(agents.length > 0 ? { agents } : {}),
+              },
+              delivery: "queue",
+              intent: {
+                ...(intentMode ? { mode: intentMode } : {}),
+                model: {
+                  providerID: selectedModel.providerID,
+                  modelID: selectedModel.modelID,
+                  variant,
+                },
+                ...(budget > 0 ? { context: { maxInputTokens: budget } } : {}),
+              },
+            },
+            { throwOnError: true },
+          )
+          .catch((error) => {
+            toast.show({
+              title: "Failed to send prompt",
+              message: errorMessage(error),
+              variant: "error",
+            })
           })
-        })
+      } else {
+        sdk.client.session
+          .prompt(
+            {
+              sessionID,
+              ...selectedModel,
+              agent: agent.name,
+              model: selectedModel,
+              variant,
+              parts: [
+                ...editorParts,
+                {
+                  type: "text",
+                  text: inputText,
+                },
+                ...nonTextParts,
+              ],
+            },
+            { throwOnError: true },
+          )
+          .catch((error) => {
+            toast.show({
+              title: "Failed to send prompt",
+              message: errorMessage(error),
+              variant: "error",
+            })
+          })
+      }
       if (editorParts.length > 0) editor.markSelectionSent()
     }
     history.append({
