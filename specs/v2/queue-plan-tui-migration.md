@@ -5,6 +5,18 @@ Status: in progress (started 2026-10-03)
 Goal: make the durable V2 prompt queue and the ZCode-style plan workflow usable from the
 main TUI, without breaking existing V1 sessions.
 
+## Progress
+
+- [x] Phase 0 - session-scoped permission grants
+- [x] Phase 1 - plan workflow in v2 core (slug, plan tools, auto-continuation)
+- [x] Phase 2 - runtime marker and TUI projection (transcript rendering)
+- [x] Phase 3 - v2 prompt submission with intent, queue delivery and `/budget`
+- [ ] Phase 4 - full verification and manual smoke test
+
+Remaining polish (not blockers): prompt-area context budget indicator, message paging
+beyond the newest 50, v2 permission/question docks, live retry status, independent v2
+shell/slash endpoints (see Deferred).
+
 ## Decisions
 
 1. Session drive-mode uses an explicit persisted `runtime: "v1" | "v2"` field
