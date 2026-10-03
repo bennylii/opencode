@@ -54,6 +54,8 @@ import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { DialogQueue } from "../../component/dialog-queue"
 import { DialogPlan } from "../../component/dialog-plan"
+import { useData } from "../../context/data"
+import { projectSessionMessages } from "../../util/session-v2"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { filetype } from "../../util/filetype"
@@ -195,6 +197,8 @@ export function Session() {
   const kv = useKV()
   const { theme } = useTheme()
   const promptRef = usePromptRef()
+  const data = useData()
+  const [sessionRuntime, setSessionRuntime] = createSignal<"v1" | "v2">("v1")
   const session = createMemo(() => sync.session.get(route.sessionID))
   const location = createMemo(() => {
     const current = session()
@@ -212,7 +216,13 @@ export function Session() {
       .filter((x) => x.parentID === parentID || x.id === parentID)
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
-  const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
+  const projected = createMemo(() =>
+    sessionRuntime() === "v2"
+      ? projectSessionMessages(route.sessionID, [...(data.session.message.list(route.sessionID) ?? [])].reverse())
+      : undefined,
+  )
+  const messages = createMemo(() => projected()?.messages ?? sync.data.message[route.sessionID] ?? [])
+  const partsFor = (messageID: string) => projected()?.parts.get(messageID) ?? sync.data.part[messageID] ?? []
   const messagesBeforeRevert = () => {
     const messageID = session()?.revert?.messageID
     if (!messageID) return messages()
@@ -221,8 +231,8 @@ export function Session() {
   }
   const foregroundTasks = createMemo(() =>
     sync.data.capabilities.experimentalBackgroundSubagents
-      ? messages().flatMap((message) =>
-          (sync.data.part[message.id] ?? []).filter(
+      ?       messages().flatMap((message) =>
+          partsFor(message.id).filter(
             (part): part is ToolPart =>
               part.type === "tool" &&
               part.tool === "task" &&
@@ -314,6 +324,11 @@ export function Session() {
       }
       editor.reconnect(result.data.directory)
       await sync.session.sync(sessionID)
+      const v2 = await sdk.client.v2.session.get({ sessionID }).then((result) => result.data?.data, () => undefined)
+      if (route.sessionID === sessionID) {
+        setSessionRuntime(v2?.runtime ?? "v1")
+        if (v2?.runtime === "v2") await data.session.message.refresh(sessionID)
+      }
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
@@ -391,7 +406,7 @@ export function Session() {
         if (!message) return false
 
         // Check if message has valid non-synthetic, non-ignored text parts
-        const parts = sync.data.part[message.id]
+        const parts = partsFor(message.id)
         if (!parts || !Array.isArray(parts)) return false
 
         return parts.some((part) => part && part.type === "text" && !part.synthetic && !part.ignored)
@@ -652,7 +667,7 @@ export function Session() {
           .then(() => {
             toBottom()
           })
-        const parts = sync.data.part[message.id]
+        const parts = partsFor(message.id)
         prompt?.set(
           parts.reduce(
             (agg, part) => {
@@ -867,7 +882,7 @@ export function Session() {
           const message = messages[i]
           if (!message || message.role !== "user") continue
 
-          const parts = sync.data.part[message.id]
+          const parts = partsFor(message.id)
           if (!parts || !Array.isArray(parts)) continue
 
           const hasValidTextPart = parts.some(
@@ -910,7 +925,7 @@ export function Session() {
           return
         }
 
-        const parts = sync.data.part[lastAssistantMessage.id] ?? []
+        const parts = partsFor(lastAssistantMessage.id)
         const textParts = parts.filter((part) => part.type === "text")
         if (textParts.length === 0) {
           toast.show({ message: "No text parts found in last assistant message", variant: "error" })
@@ -952,7 +967,7 @@ export function Session() {
           const sessionMessages = messages()
           const transcript = formatTranscript(
             sessionData,
-            sessionMessages.map((msg) => ({ info: msg, parts: sync.data.part[msg.id] ?? [] })),
+            sessionMessages.map((msg) => ({ info: msg, parts: partsFor(msg.id) })),
             {
               thinking: showThinking(),
               toolDetails: showDetails(),
@@ -996,7 +1011,7 @@ export function Session() {
 
           const transcript = formatTranscript(
             sessionData,
-            sessionMessages.map((msg) => ({ info: msg, parts: sync.data.part[msg.id] ?? [] })),
+            sessionMessages.map((msg) => ({ info: msg, parts: partsFor(msg.id) })),
             {
               thinking: options.thinking,
               toolDetails: options.toolDetails,
@@ -1303,7 +1318,7 @@ export function Session() {
                             ))
                           }}
                           message={message as UserMessage}
-                          parts={sync.data.part[message.id] ?? []}
+                          parts={partsFor(message.id)}
                           pending={pending()}
                         />
                       </Match>
@@ -1311,7 +1326,7 @@ export function Session() {
                         <AssistantMessage
                           last={lastAssistant()?.id === message.id}
                           message={message as AssistantMessage}
-                          parts={sync.data.part[message.id] ?? []}
+                          parts={partsFor(message.id)}
                         />
                       </Match>
                     </Switch>
