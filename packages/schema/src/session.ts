@@ -39,6 +39,8 @@ export const Info = Schema.Struct({
   }),
   title: Schema.String,
   slug: Schema.String,
+  /** 会话引擎：v1 为 legacy 循环，v2 为 durable core runner。 */
+  runtime: Schema.Literals(["v1", "v2"]),
   location: Location.Ref,
   subpath: RelativePath.pipe(optional),
   revert: Revert.State.pipe(optional),

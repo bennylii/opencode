@@ -57,6 +57,7 @@ const sessionInfo = (directory: string) =>
     projectID: Project.ID.global,
     title: "plan",
     slug: "plan-tool-test",
+    runtime: "v2",
     cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },

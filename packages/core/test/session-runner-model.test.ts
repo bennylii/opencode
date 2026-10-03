@@ -120,6 +120,8 @@ describe("SessionRunnerModel", () => {
         title: "test",
 
         slug: "test",
+
+        runtime: "v2",
         model: {
           id: catalog.id,
           providerID: catalog.providerID,
@@ -162,6 +164,8 @@ describe("SessionRunnerModel", () => {
         title: "test",
 
         slug: "test",
+
+        runtime: "v2",
         model: { id: catalog.id, providerID: catalog.providerID, variant: ModelV2.VariantID.make("high") },
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -188,6 +192,8 @@ describe("SessionRunnerModel", () => {
         title: "test",
 
         slug: "test",
+
+        runtime: "v2",
         model: {
           id: catalog.id,
           providerID: catalog.providerID,
@@ -226,6 +232,8 @@ describe("SessionRunnerModel", () => {
         title: "test",
 
         slug: "test",
+
+        runtime: "v2",
         model: { id: catalog.id, providerID: catalog.providerID, variant: ModelV2.VariantID.make("high") },
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },

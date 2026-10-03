@@ -178,6 +178,8 @@ describe("LocationServiceMap", () => {
                 title: "test",
 
                 slug: "test",
+
+                runtime: "v2",
                 model: {
                   id: ModelV2.ID.make("chat"),
                   providerID: ProviderV2.ID.make("unavailable"),

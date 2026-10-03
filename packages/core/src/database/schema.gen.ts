@@ -191,6 +191,7 @@ export default {
           \`path\` text,
           \`title\` text NOT NULL,
           \`version\` text NOT NULL,
+          \`runtime\` text DEFAULT 'v1' NOT NULL,
           \`share_url\` text,
           \`summary_additions\` integer,
           \`summary_deletions\` integer,

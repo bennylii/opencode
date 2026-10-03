@@ -248,6 +248,7 @@ export type SessionsListOutput = {
     readonly time: { readonly created: number; readonly updated: number; readonly archived?: number }
     readonly title: string
     readonly slug: string
+    readonly runtime: "v1" | "v2"
     readonly location: { readonly directory: string; readonly workspaceID?: string }
     readonly subpath?: string
     readonly revert?: {
@@ -312,6 +313,7 @@ export type SessionsCreateOutput = {
     readonly time: { readonly created: number; readonly updated: number; readonly archived?: number }
     readonly title: string
     readonly slug: string
+    readonly runtime: "v1" | "v2"
     readonly location: { readonly directory: string; readonly workspaceID?: string }
     readonly subpath?: string
     readonly revert?: {
@@ -352,6 +354,7 @@ export type SessionsGetOutput = {
     readonly time: { readonly created: number; readonly updated: number; readonly archived?: number }
     readonly title: string
     readonly slug: string
+    readonly runtime: "v1" | "v2"
     readonly location: { readonly directory: string; readonly workspaceID?: string }
     readonly subpath?: string
     readonly revert?: {

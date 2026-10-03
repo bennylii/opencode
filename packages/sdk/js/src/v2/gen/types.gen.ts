@@ -4074,6 +4074,7 @@ export type SessionV2Info = {
   }
   title: string
   slug: string
+  runtime: "v1" | "v2"
   location: LocationRef
   subpath?: string
   revert?: RevertState

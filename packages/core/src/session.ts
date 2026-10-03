@@ -286,6 +286,13 @@ const layer = Layer.effect(
             }),
           )
         if (projected.type === "existing") return projected.session
+        // V2 创建标记 durable runtime，legacy 行保持默认 v1。
+        yield* db
+          .update(SessionTable)
+          .set({ runtime: "v2" })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie)
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
