@@ -4073,6 +4073,7 @@ export type SessionV2Info = {
     archived?: number
   }
   title: string
+  slug: string
   location: LocationRef
   subpath?: string
   revert?: RevertState

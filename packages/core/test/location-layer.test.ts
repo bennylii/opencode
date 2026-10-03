@@ -110,6 +110,9 @@ describe("LocationServiceMap", () => {
             "edit",
             "glob",
             "grep",
+            "plan_exit",
+            "plan_status",
+            "plan_update",
             "question",
             "read",
             "send_message",
@@ -128,6 +131,9 @@ describe("LocationServiceMap", () => {
             "edit",
             "glob",
             "grep",
+            "plan_exit",
+            "plan_status",
+            "plan_update",
             "question",
             "read",
             "send_message",
@@ -170,6 +176,8 @@ describe("LocationServiceMap", () => {
                 id: SessionV2.ID.make("ses_unavailable_model"),
                 projectID: ProjectV2.ID.global,
                 title: "test",
+
+                slug: "test",
                 model: {
                   id: ModelV2.ID.make("chat"),
                   providerID: ProviderV2.ID.make("unavailable"),

@@ -250,6 +250,67 @@ describe("PermissionV2", () => {
     }),
   )
 
+  it.effect("grants pre-approval rules for one session only", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: SessionV2.ID.make("ses_other"),
+          project_id: Project.ID.global,
+          slug: "other",
+          directory: "/project",
+          title: "other",
+          version: "test",
+          agent: "test",
+        })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+
+      const service = yield* PermissionV2.Service
+      yield* service.grant({
+        sessionID: SessionV2.ID.make("ses_test"),
+        rules: [{ action: "bash", resource: "npm test*", effect: "allow" }],
+      })
+
+      expect(yield* service.ask(assertion({ action: "bash", resources: ["npm test -- --run"] }))).toEqual({
+        id: PermissionV2.ID.create("per_test"),
+        effect: "allow",
+      })
+      yield* service.assert(assertion({ action: "bash", resources: ["npm test -- --run"] }))
+      expect(yield* service.list()).toEqual([])
+
+      expect(
+        yield* service.ask(
+          assertion({
+            id: PermissionV2.ID.create("per_other"),
+            sessionID: SessionV2.ID.make("ses_other"),
+            action: "bash",
+            resources: ["npm test -- --run"],
+          }),
+        ),
+      ).toEqual({ id: PermissionV2.ID.create("per_other"), effect: "ask" })
+    }),
+  )
+
+  it.effect("does not let a grant override an explicit agent deny", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "read", resource: "*", effect: "deny" }])
+      const service = yield* PermissionV2.Service
+      yield* service.grant({
+        sessionID: SessionV2.ID.make("ses_test"),
+        rules: [{ action: "read", resource: "*", effect: "allow" }],
+      })
+
+      expect(yield* service.ask(assertion())).toEqual({ id: PermissionV2.ID.create("per_test"), effect: "deny" })
+      const blocked = yield* service.assert(assertion()).pipe(Effect.flip)
+      expect(blocked).toBeInstanceOf(PermissionV2.BlockedError)
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
+
   it.effect("resolves an asked permission once", () =>
     Effect.gen(function* () {
       yield* setup()

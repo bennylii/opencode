@@ -49,6 +49,12 @@ export const ReplyInput = Schema.Struct({
 }).annotate({ identifier: "PermissionV2.ReplyInput" })
 export type ReplyInput = typeof ReplyInput.Type
 
+export const GrantInput = Schema.Struct({
+  sessionID: SessionV2.ID,
+  rules: Permission.Ruleset,
+}).annotate({ identifier: "PermissionV2.GrantInput" })
+export type GrantInput = typeof GrantInput.Type
+
 export const AskResult = Schema.Struct({
   id: ID,
   effect: Permission.Effect,
@@ -96,6 +102,8 @@ export interface Interface {
   readonly get: (id: ID) => EffectRuntime.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionV2.ID) => EffectRuntime.Effect<ReadonlyArray<Request>>
   readonly list: () => EffectRuntime.Effect<ReadonlyArray<Request>>
+  /** Grants process-local, session-scoped pre-approval rules (e.g. an approved plan's allowedPrompts). */
+  readonly grant: (input: GrantInput) => EffectRuntime.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Permission") {}
@@ -115,6 +123,7 @@ const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const pending = new Map<ID, Pending>()
+    const granted = new Map<SessionV2.ID, Permission.Ruleset>()
 
     yield* EffectRuntime.addFinalizer(() =>
       EffectRuntime.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new DeclinedError()), {
@@ -123,6 +132,7 @@ const layer = Layer.effect(
         EffectRuntime.ensuring(
           EffectRuntime.sync(() => {
             pending.clear()
+            granted.clear()
           }),
         ),
       ),
@@ -155,7 +165,7 @@ const layer = Layer.effect(
     const evaluateInput = EffectRuntime.fnUntraced(function* (input: AssertInput) {
       const rules = yield* configured(input.sessionID, input.agent)
       if (denied(input, rules)) return { effect: "deny" as const, rules }
-      const all = [...rules, ...(yield* savedRules())]
+      const all = [...rules, ...(yield* savedRules()), ...(granted.get(input.sessionID) ?? [])]
       const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
       const effect: Permission.Effect = effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : "allow"
       return { effect, rules: all }
@@ -297,7 +307,13 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID)
     })
 
-    return Service.of({ ask, assert, reply, get, forSession, list })
+    const grant = EffectRuntime.fn("PermissionV2.grant")(function* (input: GrantInput) {
+      if (input.rules.length === 0) return
+      const current = granted.get(input.sessionID)
+      granted.set(input.sessionID, current ? [...current, ...input.rules] : [...input.rules])
+    })
+
+    return Service.of({ ask, assert, reply, get, forSession, list, grant })
   }),
 )
 

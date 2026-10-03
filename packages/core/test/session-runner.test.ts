@@ -16,6 +16,7 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@opencode-ai/core/effect/app-node-platform"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { EventTable } from "@opencode-ai/core/event/sql"
 import { Project } from "@opencode-ai/core/project"
@@ -28,6 +29,7 @@ import { ContextSnapshotDecodeError } from "@opencode-ai/core/session/error"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionMessage } from "@opencode-ai/core/session/message"
+import { PlanContinuation } from "@opencode-ai/core/session/plan-continuation"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
@@ -118,6 +120,8 @@ const permission = Layer.succeed(
     reply: () => Effect.die("unused"),
     get: () => Effect.die("unused"),
     forSession: () => Effect.die("unused"),
+
+    grant: () => Effect.die("unused"),
     list: () => Effect.die("unused"),
   }),
 )
@@ -225,6 +229,21 @@ const config = Layer.succeed(
       ]),
   }),
 )
+let planFileContent: string | undefined
+const fsysOverride = Layer.effect(
+  FSUtil.Service,
+  Effect.gen(function* () {
+    const fs = yield* FSUtil.Service
+    return FSUtil.Service.of({
+      ...fs,
+      readFileStringSafe: (target: string) =>
+        planFileContent !== undefined && target.includes("plans")
+          ? Effect.succeed(planFileContent)
+          : fs.readFileStringSafe(target),
+    })
+  }),
+).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, Snapshot.noopLayer],
   [LayerNodePlatform.llmClient, client],
@@ -235,6 +254,7 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [ReferenceGuidance.node, referenceGuidance],
   [PermissionV2.node, permission],
   [Config.node, config],
+  [FSUtil.node, fsysOverride],
 ])
 const execution = Layer.effect(
   SessionExecution.Service,
@@ -285,6 +305,7 @@ const it = testEffect(
       [Snapshot.node, Snapshot.noopLayer],
       [SessionExecution.node, execution],
       [Config.node, config],
+      [FSUtil.node, fsysOverride],
     ],
   ),
 )
@@ -2128,6 +2149,45 @@ describe("SessionRunnerLLM", () => {
       expect(userTexts(requests[0]!)).toEqual(["Start working"])
       expect(userTexts(requests[1]!)).toEqual(["Start working", "Guide followup"])
       expect(yield* session.queue.list(sessionID)).toEqual([])
+    }),
+  )
+
+  it.effect("continues pending plan items and stops after stalling", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const previous = process.env["OPENCODE_EXPERIMENTAL_PLAN_MODE"]
+      process.env["OPENCODE_EXPERIMENTAL_PLAN_MODE"] = "1"
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env["OPENCODE_EXPERIMENTAL_PLAN_MODE"]
+          else process.env["OPENCODE_EXPERIMENTAL_PLAN_MODE"] = previous
+          planFileContent = undefined
+          PlanContinuation.resetPlanContinuation(sessionID)
+        }),
+      )
+      PlanContinuation.resetPlanContinuation(sessionID)
+      planFileContent = "- [ ] first\n- [ ] second"
+
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Start implementing plan" }), resume: false })
+
+      requests.length = 0
+      responses = Array.from({ length: 4 }, () => [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ])
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(4)
+      expect(userTexts(requests[0]!)).toEqual(["Start implementing plan"])
+      expect(userTexts(requests[1]!)).toEqual([
+        "Start implementing plan",
+        "Continue with the next plan item: first\nRun its verification, then mark it done with evidence using plan_update.\nUse plan_status to check remaining items.",
+      ])
+      expect(userTexts(requests[2]!)).toHaveLength(3)
+      expect(userTexts(requests[3]!)).toHaveLength(4)
     }),
   )
 

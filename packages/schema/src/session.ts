@@ -38,6 +38,7 @@ export const Info = Schema.Struct({
     archived: DateTimeUtcFromMillis.pipe(optional),
   }),
   title: Schema.String,
+  slug: Schema.String,
   location: Location.Ref,
   subpath: RelativePath.pipe(optional),
   revert: Revert.State.pipe(optional),

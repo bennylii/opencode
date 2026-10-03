@@ -13,6 +13,8 @@ import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
+import { Flag } from "../../flag/flag"
+import { FSUtil } from "../../fs-util"
 import { Location } from "../../location"
 import { ModelV2 } from "../../model"
 import { PermissionV2 } from "../../permission"
@@ -30,6 +32,8 @@ import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
 import { SessionMessage } from "../message"
+import { PlanContinuation } from "../plan-continuation"
+import { PlanFile } from "../plan-file"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service } from "./index"
@@ -101,6 +105,7 @@ const layer = Layer.effect(
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
+    const fsys = yield* FSUtil.Service
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
     const referenceGuidance = yield* ReferenceGuidance.Service
@@ -199,7 +204,11 @@ const layer = Layer.effect(
             ...(yield* SessionInput.promoteSteers(db, events, session.id, cutoff)),
           ]
         }
-        if (promotedRows.length > 0) currentStep = 1
+        if (promotedRows.length > 0) {
+          currentStep = 1
+          // 新的用户输入优先于自动续跑：重置停滞计数。
+          PlanContinuation.resetPlanContinuation(session.id)
+        }
       }
       const intent = promotedRows.at(-1)?.intent ?? undefined
       const intentAgent = intent?.mode
@@ -479,6 +488,35 @@ const layer = Layer.effect(
             promotion = "queue"
             needsContinuation = true
           }
+          // 计划自动续跑：回合自然结束且没有新的待提升输入时，继续下一个计划项。
+          // 用户输入优先；plan agent 不自动续跑；停滞保护见 PlanContinuation。
+          if (
+            !needsContinuation &&
+            Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE &&
+            !(yield* SessionInput.hasPending(db, input.sessionID, "steer")) &&
+            !(yield* SessionInput.hasPending(db, input.sessionID, "queue"))
+          ) {
+            const session = yield* store.get(input.sessionID)
+            if (session && session.agent !== "plan") {
+              const content = yield* fsys.readFileStringSafe(PlanFile.planFile(session, location)).pipe(Effect.orDie)
+              const continuation = content
+                ? PlanContinuation.nextPlanContinuation(input.sessionID, content)
+                : undefined
+              if (continuation) {
+                yield* events.publish(SessionEvent.Synthetic, {
+                  sessionID: input.sessionID,
+                  messageID: SessionMessage.ID.create(),
+                  timestamp: yield* DateTime.now,
+                  text: [
+                    `Continue with the next plan item: ${continuation.item.text}`,
+                    "Run its verification, then mark it done with evidence using plan_update.",
+                    "Use plan_status to check remaining items.",
+                  ].join("\n"),
+                })
+                needsContinuation = true
+              }
+            }
+          }
         }
         shouldRun = policy.autoDrain && (yield* SessionInput.hasPending(db, input.sessionID, "queue"))
         promotion = shouldRun ? "queue" : undefined
@@ -502,6 +540,7 @@ export const node = makeLocationNode({
     SessionRunnerModel.node,
     SessionStore.node,
     Location.node,
+    FSUtil.node,
     SystemContextRegistry.node,
     SkillGuidance.node,
     ReferenceGuidance.node,

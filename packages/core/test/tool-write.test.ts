@@ -38,6 +38,8 @@ const permission = Layer.succeed(
     reply: () => Effect.die("unused"),
     get: () => Effect.die("unused"),
     forSession: () => Effect.die("unused"),
+
+    grant: () => Effect.die("unused"),
     list: () => Effect.die("unused"),
   }),
 )

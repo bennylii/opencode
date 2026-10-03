@@ -118,6 +118,8 @@ describe("SessionRunnerModel", () => {
         id: SessionV2.ID.make("ses_model_variant"),
         projectID: ProjectV2.ID.global,
         title: "test",
+
+        slug: "test",
         model: {
           id: catalog.id,
           providerID: catalog.providerID,
@@ -158,6 +160,8 @@ describe("SessionRunnerModel", () => {
         id: SessionV2.ID.make("ses_compatible_variant"),
         projectID: ProjectV2.ID.global,
         title: "test",
+
+        slug: "test",
         model: { id: catalog.id, providerID: catalog.providerID, variant: ModelV2.VariantID.make("high") },
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -182,6 +186,8 @@ describe("SessionRunnerModel", () => {
         id: SessionV2.ID.make("ses_model_variant_unavailable"),
         projectID: ProjectV2.ID.global,
         title: "test",
+
+        slug: "test",
         model: {
           id: catalog.id,
           providerID: catalog.providerID,
@@ -218,6 +224,8 @@ describe("SessionRunnerModel", () => {
         id: SessionV2.ID.make("ses_anthropic_variant"),
         projectID: ProjectV2.ID.global,
         title: "test",
+
+        slug: "test",
         model: { id: catalog.id, providerID: catalog.providerID, variant: ModelV2.VariantID.make("high") },
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
