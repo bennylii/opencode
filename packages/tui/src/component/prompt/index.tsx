@@ -104,6 +104,12 @@ const money = new Intl.NumberFormat("en-US", {
 
 const DRAFT_RETENTION_MIN_CHARS = 20
 
+function formatContextBudget(tokens: number) {
+  if (tokens >= 1_000_000) return `${Math.round(tokens / 100_000) / 10}M`
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`
+  return String(tokens)
+}
+
 function randomIndex(count: number) {
   if (count <= 0) return 0
   return Math.floor(Math.random() * count)
@@ -1524,6 +1530,10 @@ export function Prompt(props: PromptProps) {
                                 {local.model.variant.current()}
                               </span>
                             </text>
+                          </Show>
+                          <Show when={contextBudget() > 0}>
+                            <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>·</text>
+                            <text fg={fadeColor(theme.accent, modelMetaAlpha())}>≤{formatContextBudget(contextBudget())}</text>
                           </Show>
                         </box>
                       </Show>

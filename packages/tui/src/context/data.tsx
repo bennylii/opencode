@@ -427,8 +427,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.message[sessionID]
           },
           async refresh(sessionID: string) {
-            const result = await sdk.client.v2.session.messages({ sessionID }, { throwOnError: true })
-            setStore("session", "message", sessionID, result.data.data)
+            const messages: SessionMessage[] = []
+            let cursor: string | undefined
+            // 以倒序游标翻页，最多加载 2000 条，保持 store 的新到旧顺序。
+            for (let page = 0; page < 10; page++) {
+              const result = await sdk.client.v2.session.messages(
+                { sessionID, limit: 200, ...(cursor ? { cursor } : {}) },
+                { throwOnError: true },
+              )
+              messages.push(...result.data.data)
+              cursor = result.data.cursor?.next
+              if (!cursor || result.data.data.length === 0) break
+            }
+            setStore("session", "message", sessionID, messages)
           },
         },
         permission: {
