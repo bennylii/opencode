@@ -11,11 +11,14 @@ main TUI, without breaking existing V1 sessions.
 - [x] Phase 1 - plan workflow in v2 core (slug, plan tools, auto-continuation)
 - [x] Phase 2 - runtime marker and TUI projection (transcript rendering)
 - [x] Phase 3 - v2 prompt submission with intent, queue delivery and `/budget`
-- [ ] Phase 4 - full verification and manual smoke test
+- [x] Phase 4 - automated end-to-end verification (HTTP queue smoke flow) and
+      polish: paged v2 history, prompt budget indicator, v2 permission and
+      question docks, retry status surfacing
 
-Remaining polish (not blockers): prompt-area context budget indicator, message paging
-beyond the newest 50, v2 permission/question docks, live retry status, independent v2
-shell/slash endpoints (see Deferred).
+The manual `bun dev` smoke is replaced by
+`packages/opencode/test/server/httpapi-session.test.ts` "runs an end-to-end v2
+queue flow over HTTP", which covers create (runtime v2), a held provider turn, a
+queued prompt, edit, sendNow promotion and the follow-up turn.
 
 ## Decisions
 
