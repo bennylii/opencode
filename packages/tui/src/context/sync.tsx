@@ -80,10 +80,10 @@ export const {
       agent: Agent[]
       command: Command[]
       permission: {
-        [sessionID: string]: PermissionRequest[]
+        [sessionID: string]: (PermissionRequest & { v2?: true })[]
       }
       question: {
-        [sessionID: string]: QuestionRequest[]
+        [sessionID: string]: (QuestionRequest & { v2?: true })[]
       }
       config: Config
       session: Session[]
@@ -193,6 +193,61 @@ export const {
           break
         }
 
+        case "permission.v2.asked": {
+          const request = event.properties
+          const mapped: PermissionRequest & { v2?: true } = {
+            id: request.id,
+            sessionID: request.sessionID,
+            permission: request.action,
+            patterns: [...request.resources],
+            metadata: request.metadata ?? {},
+            always: [...(request.save ?? [])],
+            tool: request.source ? { messageID: request.source.messageID, callID: request.source.callID } : undefined,
+            v2: true,
+          }
+          if (permission.mode === "auto") {
+            void sdk.client.v2.session.permission.reply({
+              sessionID: mapped.sessionID,
+              requestID: mapped.id,
+              reply: "once",
+            })
+            break
+          }
+          const requests = store.permission[mapped.sessionID]
+          if (!requests) {
+            setStore("permission", mapped.sessionID, [mapped])
+            break
+          }
+          const match = search(requests, mapped.id, (r) => r.id)
+          if (match.found) {
+            setStore("permission", mapped.sessionID, match.index, reconcile(mapped))
+            break
+          }
+          setStore(
+            "permission",
+            mapped.sessionID,
+            produce((draft) => {
+              draft.splice(match.index, 0, mapped)
+            }),
+          )
+          break
+        }
+
+        case "permission.v2.replied": {
+          const requests = store.permission[event.properties.sessionID]
+          if (!requests) break
+          const match = search(requests, event.properties.requestID, (r) => r.id)
+          if (!match.found) break
+          setStore(
+            "permission",
+            event.properties.sessionID,
+            produce((draft) => {
+              draft.splice(match.index, 1)
+            }),
+          )
+          break
+        }
+
         case "permission.asked": {
           const request = event.properties
           if (permission.mode === "auto") {
@@ -226,6 +281,44 @@ export const {
 
         case "question.replied":
         case "question.rejected": {
+          const requests = store.question[event.properties.sessionID]
+          if (!requests) break
+          const match = search(requests, event.properties.requestID, (r) => r.id)
+          if (!match.found) break
+          setStore(
+            "question",
+            event.properties.sessionID,
+            produce((draft) => {
+              draft.splice(match.index, 1)
+            }),
+          )
+          break
+        }
+
+        case "question.v2.asked": {
+          const request = { ...event.properties, v2: true as const }
+          const requests = store.question[request.sessionID]
+          if (!requests) {
+            setStore("question", request.sessionID, [request])
+            break
+          }
+          const match = search(requests, request.id, (r) => r.id)
+          if (match.found) {
+            setStore("question", request.sessionID, match.index, reconcile(request))
+            break
+          }
+          setStore(
+            "question",
+            request.sessionID,
+            produce((draft) => {
+              draft.splice(match.index, 0, request)
+            }),
+          )
+          break
+        }
+
+        case "question.v2.replied":
+        case "question.v2.rejected": {
           const requests = store.question[event.properties.sessionID]
           if (!requests) break
           const match = search(requests, event.properties.requestID, (r) => r.id)
@@ -315,6 +408,24 @@ export const {
 
         case "session.status": {
           setStore("session_status", event.properties.sessionID, event.properties.status)
+          break
+        }
+
+        case "session.next.retried": {
+          setStore("session_status", event.properties.sessionID, {
+            type: "retry",
+            attempt: event.properties.attempt,
+            message: event.properties.error.message,
+          })
+          break
+        }
+
+        case "session.next.prompted":
+        case "session.next.step.started":
+        case "session.next.text.started": {
+          // V2 会话的 retry 提示在恢复输出后清除。
+          if (store.session_status[event.properties.sessionID]?.type === "retry")
+            setStore("session_status", event.properties.sessionID, { type: "busy" })
           break
         }
 
