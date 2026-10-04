@@ -446,7 +446,8 @@ const layer = Layer.effect(
         sendNow: Effect.fn("V2Session.queue.sendNow")(function* (input) {
           yield* result.get(input.sessionID)
           const promoted = yield* SessionInput.promoteQueued(db, events, input)
-          if (promoted) yield* execution.resume(input.sessionID).pipe(Effect.ignore)
+          // wake 会在当前 drain 结束后安排一次后继执行（空闲时直接启动），确保新提升的输入得到作答。
+          if (promoted) yield* execution.wake(input.sessionID).pipe(Effect.ignore)
           return promoted
         }),
         policy: Effect.fn("V2Session.queue.policy")(function* (sessionID) {

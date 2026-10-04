@@ -18,6 +18,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
 const resumeCalls: SessionV2.ID[] = []
+const wakeCalls: SessionV2.ID[] = []
 
 const execution = Layer.succeed(
   SessionExecution.Service,
@@ -28,7 +29,10 @@ const execution = Layer.succeed(
         resumeCalls.push(sessionID)
       }),
     interrupt: () => Effect.void,
-    wake: () => Effect.void,
+    wake: (sessionID) =>
+      Effect.sync(() => {
+        wakeCalls.push(sessionID)
+      }),
   }),
 )
 
@@ -170,16 +174,16 @@ describe("SessionV2.queue", () => {
     }),
   )
 
-  it.effect("promotes a specific queued input on sendNow and resumes execution", () =>
+  it.effect("promotes a specific queued input on sendNow and wakes execution", () =>
     Effect.gen(function* () {
       yield* setup
-      resumeCalls.length = 0
+      wakeCalls.length = 0
       const session = yield* SessionV2.Service
       const first = yield* admit("first")
       const second = yield* admit("second")
 
       expect(yield* session.queue.sendNow({ sessionID, id: second.id })).toBe(true)
-      expect(resumeCalls).toEqual([sessionID])
+      expect(wakeCalls).toEqual([sessionID])
 
       const pending = yield* session.queue.list(sessionID)
       expect(pending.map((item) => item.prompt.text)).toEqual(["first"])

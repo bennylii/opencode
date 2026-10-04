@@ -2114,6 +2114,51 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("answers a queued input promoted by sendNow mid-turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Start working" }), resume: false })
+
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+
+      const first = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      const queued = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Send now work" }),
+        delivery: "queue",
+        resume: false,
+      })
+      const send = yield* session.queue.sendNow({ sessionID, id: queued.id }).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(first)
+      yield* Fiber.join(send)
+      for (let i = 0; i < 500 && requests.length < 2; i++) yield* Effect.yieldNow
+      streamGate = undefined
+      streamStarted = undefined
+
+      expect(requests).toHaveLength(2)
+      expect(userTexts(requests[1]!)).toEqual(["Start working", "Send now work"])
+      expect(yield* session.queue.list(sessionID)).toEqual([])
+    }),
+  )
+
   it.effect("guide follow-up mode drains queued inputs within the same turn", () =>
     Effect.gen(function* () {
       yield* setup

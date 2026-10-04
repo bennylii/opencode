@@ -706,6 +706,116 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
   )
 
+  it.live(
+    "runs an end-to-end v2 queue flow over HTTP",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const config = {
+          formatter: false,
+          lsp: false,
+          providers: {
+            test: {
+              name: "Test",
+              api: { type: "aisdk", package: "@ai-sdk/openai-compatible", url: llm.url },
+              request: { body: { apiKey: "test-key" } },
+              models: {
+                "test-model": {
+                  name: "Test Model",
+                  limit: { context: 100_000, output: 10_000 },
+                  cost: { input: 0, output: 0 },
+                },
+              },
+            },
+          },
+        }
+        const directory = yield* tmpdirScoped({ git: true, config })
+        const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+
+        // Location plugins populate the v2 catalog asynchronously; wait for the test provider.
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ providerID: string; id: string }> }>("/api/model", { headers }).pipe(
+            Effect.map((body) =>
+              body.data.some((model) => model.providerID === "test" && model.id === "test-model")
+                ? true
+                : undefined,
+            ),
+          ),
+          "test model did not enter the catalog",
+          "10 seconds",
+        )
+
+        const created = yield* requestJson<{ data: { id: string; runtime: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            location: { directory },
+            agent: "build",
+            model: { id: "test-model", providerID: "test" },
+          }),
+        })
+        expect(created.data.runtime).toBe("v2")
+        const sessionID = created.data.id
+
+        const gate = Promise.withResolvers<void>()
+        yield* llm.hold("first reply", gate.promise)
+        yield* llm.text("queued reply")
+
+        const first = yield* request(`/api/session/${sessionID}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "first" } }),
+        })
+        expect(first.status).toBe(200)
+        yield* pollWithTimeout(
+          llm.calls.pipe(Effect.map((calls) => (calls >= 1 ? true : undefined))),
+          "first provider call did not start",
+          "10 seconds",
+        )
+
+        const queued = yield* requestJson<{ data: { id: string } }>(`/api/session/${sessionID}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "queued work" }, delivery: "queue", resume: false }),
+        })
+        const edit = yield* request(`/api/session/${sessionID}/queue/${queued.data.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ text: "queued work edited" }),
+        })
+        expect(edit.status).toBe(200)
+
+        const send = yield* request(`/api/session/${sessionID}/queue/${queued.data.id}/send`, {
+          method: "POST",
+          headers,
+        })
+        expect(send.status).toBe(200)
+        gate.resolve()
+
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ type: string; text?: string }> }>(
+            `/api/session/${sessionID}/message?order=asc`,
+            { headers },
+          ).pipe(
+            Effect.map((body) =>
+              body.data.some((message) => message.type === "user" && message.text === "queued work edited")
+                ? true
+                : undefined,
+            ),
+          ),
+          "queued input was not promoted",
+          "10 seconds",
+        )
+        yield* pollWithTimeout(
+          llm.calls.pipe(Effect.map((calls) => (calls >= 2 ? true : undefined))),
+          "queued input was not answered",
+          "10 seconds",
+        )
+        const remaining = yield* requestJson<{ data: Array<unknown> }>(`/api/session/${sessionID}/queue`, { headers })
+        expect(remaining.data).toEqual([])
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
   it.instance(
     "returns v2 public unavailable errors for unfinished session mutations",
     () =>

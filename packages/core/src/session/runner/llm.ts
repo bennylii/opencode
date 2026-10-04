@@ -122,6 +122,20 @@ const layer = Layer.effect(
     const getContext = Effect.fn("SessionRunner.getContext")(function* (sessionID: SessionSchema.ID) {
       return yield* store.context(sessionID)
     })
+    const loadEntries = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      return yield* SessionHistory.entriesForRunner(db, sessionID, Number.MAX_SAFE_INTEGER).pipe(Effect.orDie)
+    })
+    /** 末尾是未回答的用户/合成输入（无进行中的回合时使用）。 */
+    const hasTrailingUnanswered = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      const last = (yield* loadEntries(sessionID)).at(-1)
+      return last?.message.type === "user" || last?.message.type === "synthetic"
+    })
+    /** 指定回合快照之后新增的未回答用户/合成输入（例如 sendNow 在回合中提升的消息）。 */
+    const hasUnansweredAfter = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, afterSeq: number) {
+      return (yield* loadEntries(sessionID)).some(
+        (entry) => entry.seq > afterSeq && (entry.message.type === "user" || entry.message.type === "synthetic"),
+      )
+    })
     const failInterruptedTools = Effect.fn("SessionRunner.failInterruptedTools")(function* (
       sessionID: SessionSchema.ID,
     ) {
@@ -242,6 +256,7 @@ const layer = Layer.effect(
       const model = yield* models.resolve(intentModelRef ? { ...session, model: intentModelRef } : session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      const contextSeq = entries.at(-1)?.seq ?? -1
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
@@ -414,7 +429,12 @@ const layer = Layer.effect(
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure" && Cause.hasInterrupts(settled.cause))
             return yield* Effect.failCause(settled.cause)
-          return { needsContinuation: !publisher.hasProviderError() && needsContinuation, step: currentStep }
+          return {
+            needsContinuation: !publisher.hasProviderError() && needsContinuation,
+            step: currentStep,
+            producedAssistant: publisher.hasAssistantStarted(),
+            contextSeq,
+          }
         }),
       )
     }, Effect.scoped)
@@ -422,7 +442,15 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
-    ) => Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError>
+    ) => Effect.Effect<
+      {
+        readonly needsContinuation: boolean
+        readonly step: number
+        readonly producedAssistant: boolean
+        readonly contextSeq: number
+      },
+      RunError
+    >
 
     const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
       return yield* runTurnAttempt(sessionID, promotion, step).pipe(
@@ -459,7 +487,9 @@ const layer = Layer.effect(
       const policy = yield* SessionInput.queuePolicy(db, input.sessionID)
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
-      if (!input.force && !hasSteer && !hasQueue) return
+      // 末尾存在未回答的用户/合成输入时（例如 sendNow 已提升的队列项），即使没有新的 pending 输入也要执行。
+      const unanswered = yield* hasTrailingUnanswered(input.sessionID)
+      if (!input.force && !hasSteer && !hasQueue && !unanswered) return
       yield* failInterruptedTools(input.sessionID)
       // autoDrain=false 时队列项只通过显式 sendQueuedNow/resume 提升。
       let promotion: SessionInput.Delivery | undefined = hasSteer
@@ -467,7 +497,7 @@ const layer = Layer.effect(
         : policy.autoDrain && hasQueue
           ? "queue"
           : undefined
-      let shouldRun = input.force || hasSteer || hasQueue
+      let shouldRun = input.force || hasSteer || hasQueue || unanswered
       while (shouldRun) {
         let needsContinuation = true
         let step = 1
@@ -477,6 +507,10 @@ const layer = Layer.effect(
           step = result.step + 1
           promotion = "steer"
           if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+          // 回合结束后若快照之后出现了未回答的用户/合成输入，继续作答，避免 drain 提前结束。
+          // 仅在本次回合真的产生了 assistant 输出时继续，避免空流导致死循环。
+          if (!needsContinuation && result.producedAssistant)
+            needsContinuation = yield* hasUnansweredAfter(input.sessionID, result.contextSeq)
           // guide 模式：队列项在当前 drain 内继续执行（沿用同一 turn 预算），
           // 而不是等空闲后开新 turn。
           if (
