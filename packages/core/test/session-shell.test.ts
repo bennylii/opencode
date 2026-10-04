@@ -24,6 +24,7 @@ const execution = Layer.succeed(
     active: Effect.succeed(new Set<SessionV2.ID>()),
     resume: () => Effect.void,
     wake: () => Effect.void,
+    await: () => Effect.void,
     interrupt: () => Effect.void,
   }),
 )

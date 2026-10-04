@@ -849,20 +849,15 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
-    "returns v2 public unavailable errors for unfinished session mutations",
+    "waits for an idle v2 session",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const headers = { "x-opencode-directory": test.directory }
-        const session = yield* createSession({ title: "v2 unavailable" })
+        const session = yield* createSession({ title: "v2 wait" })
 
         const wait = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
-        expect(wait.status).toBe(503)
-        expect(yield* responseJson(wait)).toEqual({
-          _tag: "ServiceUnavailableError",
-          message: "Session wait is not available yet",
-          service: "session.wait",
-        })
+        expect(wait.status).toBe(204)
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

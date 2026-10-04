@@ -12,7 +12,6 @@ import {
   InvalidCursorError,
   InvalidRequestError,
   MessageNotFoundError,
-  ServiceUnavailableError,
   SessionNotFoundError,
   UnknownError,
 } from "../errors"
@@ -372,7 +371,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       HttpApiEndpoint.post("session.wait", "/api/session/:sessionID/wait", {
         params: { sessionID: Session.ID },
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, ServiceUnavailableError],
+        error: [SessionNotFoundError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

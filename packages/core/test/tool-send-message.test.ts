@@ -55,6 +55,8 @@ describe("SendMessageTool", () => {
         SessionExecution.Service.of({
           active: Effect.sync(() => new Set(active)),
           resume: () => Effect.void,
+          await: () => Effect.void,
+
           interrupt: () => Effect.void,
           wake: (sessionID) =>
             Effect.sync(() => {

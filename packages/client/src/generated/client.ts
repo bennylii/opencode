@@ -510,7 +510,7 @@ export function make(options: ClientOptions) {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/wait`,
             successStatus: 204,
-            declaredStatuses: [404, 503, 400, 401],
+            declaredStatuses: [404, 400, 401],
             empty: true,
           },
           requestOptions,

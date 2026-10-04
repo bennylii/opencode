@@ -267,6 +267,7 @@ const execution = Layer.effect(
       active: coordinator.active,
       resume: coordinator.run,
       wake: coordinator.wake,
+      await: coordinator.awaitIdle,
       interrupt: coordinator.interrupt,
     })
   }),
@@ -2156,6 +2157,45 @@ describe("SessionRunnerLLM", () => {
       expect(requests).toHaveLength(2)
       expect(userTexts(requests[1]!)).toEqual(["Start working", "Send now work"])
       expect(yield* session.queue.list(sessionID)).toEqual([])
+    }),
+  )
+
+  it.effect("wait resolves after the active drain finishes", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Start working" }), resume: false })
+
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+
+      const first = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      let waited = false
+      const wait = yield* session.wait(sessionID).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            waited = true
+          }),
+        ),
+        Effect.forkChild,
+      )
+      yield* Effect.yieldNow
+      expect(waited).toBe(false)
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(first)
+      yield* Fiber.join(wait)
+      expect(waited).toBe(true)
+      streamGate = undefined
+      streamStarted = undefined
     }),
   )
 

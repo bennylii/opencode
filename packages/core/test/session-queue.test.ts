@@ -28,6 +28,8 @@ const execution = Layer.succeed(
       Effect.sync(() => {
         resumeCalls.push(sessionID)
       }),
+    await: () => Effect.void,
+
     interrupt: () => Effect.void,
     wake: (sessionID) =>
       Effect.sync(() => {

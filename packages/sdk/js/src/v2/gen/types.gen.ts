@@ -2782,12 +2782,6 @@ export type UnknownError1 = {
   ref?: string
 }
 
-export type ServiceUnavailableError = {
-  _tag: "ServiceUnavailableError"
-  message: string
-  service?: string
-}
-
 export type MessageNotFoundError = {
   _tag: "MessageNotFoundError"
   sessionID: string
@@ -2842,6 +2836,12 @@ export type SessionMessagesResponse = {
     previous?: string
     next?: string
   }
+}
+
+export type ServiceUnavailableError = {
+  _tag: "ServiceUnavailableError"
+  message: string
+  service?: string
 }
 
 export type ProviderNotFoundError = {
@@ -12242,10 +12242,6 @@ export type V2SessionWaitErrors = {
    * SessionNotFoundError
    */
   404: SessionNotFoundError
-  /**
-   * ServiceUnavailableError
-   */
-  503: ServiceUnavailableError
 }
 
 export type V2SessionWaitError = V2SessionWaitErrors[keyof V2SessionWaitErrors]
