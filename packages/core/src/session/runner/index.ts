@@ -23,6 +23,8 @@ export interface Interface {
     readonly sessionID: SessionSchema.ID
     readonly force: boolean
   }) => Effect.Effect<void, RunError>
+  /** Summarizes the current history into a manual compaction, keeping no recent tail. */
+  readonly compact: (sessionID: SessionSchema.ID) => Effect.Effect<void, RunError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/SessionRunner") {}

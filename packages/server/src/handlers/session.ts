@@ -204,14 +204,19 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 }),
               ),
             ),
-            Effect.catchTag("Session.OperationUnavailableError", (error) =>
-              Effect.fail(
-                new ServiceUnavailableError({
-                  message: `Session ${error.operation} is not available yet`,
-                  service: `session.${error.operation}`,
-                }),
-              ),
-            ),
+            Effect.catch((error) => {
+              const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+              return Effect.logError("failed to compact session", { cause: error }).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new UnknownError({
+                      message: "Unexpected server error. Check server logs for details.",
+                      ref,
+                    }),
+                  ),
+                ),
+              )
+            }),
           )
           return HttpApiSchema.NoContent.make()
         }),

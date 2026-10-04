@@ -78,6 +78,8 @@ type Input = {
   readonly entries: readonly Entry[]
   readonly model: Model
   readonly request: LLMRequest
+  readonly reason?: "auto" | "manual"
+  readonly keepTokens?: number
 }
 
 const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
@@ -179,9 +181,10 @@ export const make = (dependencies: Dependencies) => {
     const context = input.model.route.defaults.limits?.context
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
-    const selected = select(input.entries, config.tokens)
+    const selected = select(input.entries, input.keepTokens ?? config.tokens)
     const previousSummary = input.entries.find((entry) => entry.message.type === "compaction")?.message
     if (!selected || (selected.head.length === 0 && previousSummary?.type !== "compaction")) return false
+    const reason = input.reason ?? "auto"
     const summaryPrompt = buildPrompt({
       previousSummary: previousSummary?.type === "compaction" ? previousSummary.summary : undefined,
       context: [previousSummary?.type === "compaction" ? previousSummary.recent : "", selected.head].filter(Boolean),
@@ -193,7 +196,7 @@ export const make = (dependencies: Dependencies) => {
       sessionID: input.sessionID,
       messageID,
       timestamp: yield* DateTime.now,
-      reason: "auto",
+      reason,
     })
 
     const chunks: string[] = []
@@ -223,7 +226,7 @@ export const make = (dependencies: Dependencies) => {
       sessionID: input.sessionID,
       messageID,
       timestamp: yield* DateTime.now,
-      reason: "auto",
+      reason,
       text: summary,
       recent: selected.recent,
     })

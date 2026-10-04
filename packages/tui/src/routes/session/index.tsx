@@ -634,6 +634,14 @@ export function Session() {
         aliases: ["summarize"],
       },
       run: () => {
+        if (sessionRuntime() === "v2") {
+          dialog.clear()
+          void sdk.client.v2.session
+            .compact({ sessionID: route.sessionID }, { throwOnError: true })
+            .then(() => toast.show({ message: "Session compacted", variant: "success" }))
+            .catch((error) => toast.show({ message: errorMessage(error), variant: "error" }))
+          return
+        }
         const selectedModel = local.model.current()
         if (!selectedModel) {
           toast.show({

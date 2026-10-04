@@ -856,14 +856,6 @@ describe("session HttpApi", () => {
         const headers = { "x-opencode-directory": test.directory }
         const session = yield* createSession({ title: "v2 unavailable" })
 
-        const compact = yield* request(`/api/session/${session.id}/compact`, { method: "POST", headers })
-        expect(compact.status).toBe(503)
-        expect(yield* responseJson(compact)).toEqual({
-          _tag: "ServiceUnavailableError",
-          message: "Session compact is not available yet",
-          service: "session.compact",
-        })
-
         const wait = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
         expect(wait.status).toBe(503)
         expect(yield* responseJson(wait)).toEqual({
@@ -873,6 +865,85 @@ describe("session HttpApi", () => {
         })
       }),
     { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.live(
+    "compacts a v2 session over HTTP",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const config = {
+          formatter: false,
+          lsp: false,
+          providers: {
+            test: {
+              name: "Test",
+              api: { type: "aisdk", package: "@ai-sdk/openai-compatible", url: llm.url },
+              request: { body: { apiKey: "test-key" } },
+              models: {
+                "test-model": {
+                  name: "Test Model",
+                  limit: { context: 100_000, output: 10_000 },
+                  cost: { input: 0, output: 0 },
+                },
+              },
+            },
+          },
+        }
+        const directory = yield* tmpdirScoped({ git: true, config })
+        const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ providerID: string; id: string }> }>("/api/model", { headers }).pipe(
+            Effect.map((body) =>
+              body.data.some((model) => model.providerID === "test" && model.id === "test-model")
+                ? true
+                : undefined,
+            ),
+          ),
+          "test model did not enter the catalog",
+          "10 seconds",
+        )
+
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            location: { directory },
+            agent: "build",
+            model: { id: "test-model", providerID: "test" },
+          }),
+        })
+        const sessionID = created.data.id
+
+        yield* request(`/api/session/${sessionID}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "hello" } }),
+        })
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ type: string }> }>(`/api/session/${sessionID}/message?order=asc`, {
+            headers,
+          }).pipe(Effect.map((body) => (body.data.some((item) => item.type === "assistant") ? true : undefined))),
+          "assistant reply was not recorded",
+          "10 seconds",
+        )
+
+        const compact = yield* request(`/api/session/${sessionID}/compact`, { method: "POST", headers })
+        expect(compact.status).toBe(204)
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ type: string; reason?: string }> }>(
+            `/api/session/${sessionID}/message?order=asc`,
+            { headers },
+          ).pipe(
+            Effect.map((body) =>
+              body.data.some((item) => item.type === "compaction" && item.reason === "manual") ? true : undefined,
+            ),
+          ),
+          "manual compaction was not recorded",
+          "10 seconds",
+        )
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
   )
 
   it.instance(

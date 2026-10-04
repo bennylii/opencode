@@ -2776,6 +2776,12 @@ export type SessionQueuePolicy = {
   followupMode: "queue" | "guide"
 }
 
+export type UnknownError1 = {
+  _tag: "UnknownError"
+  message: string
+  ref?: string
+}
+
 export type ServiceUnavailableError = {
   _tag: "ServiceUnavailableError"
   message: string
@@ -2787,12 +2793,6 @@ export type MessageNotFoundError = {
   sessionID: string
   messageID: string
   message: string
-}
-
-export type UnknownError1 = {
-  _tag: "UnknownError"
-  message: string
-  ref?: string
 }
 
 export type SessionDurableEvent =
@@ -12204,9 +12204,9 @@ export type V2SessionCompactErrors = {
    */
   404: SessionNotFoundError
   /**
-   * ServiceUnavailableError
+   * UnknownError
    */
-  503: ServiceUnavailableError
+  500: UnknownError1
 }
 
 export type V2SessionCompactError = V2SessionCompactErrors[keyof V2SessionCompactErrors]
