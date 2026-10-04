@@ -18,6 +18,8 @@ main TUI, without breaking existing V1 sessions.
       shell mode)
 - [x] Post-phase - v2 manual compaction (`/compact`)
 - [x] Post-phase - v2 `session.wait`
+- [x] Post-phase - v2 slash command invocation (template expansion, shell
+      interpolation, TUI routing)
 
 The manual `bun dev` smoke is replaced by
 `packages/opencode/test/server/httpapi-session.test.ts` "runs an end-to-end v2
@@ -150,7 +152,6 @@ Commit: `feat(tui): submit v2 prompts with intent and queue delivery`
 These V2 protocol/core gaps must be filled before removing the TUI V2-session
 restrictions:
 
-- Slash-command invocation endpoint (V2 only lists commands).
 - Session fork, share/unshare, rename/update, delete at the V2 layer.
 - Todo and diff HTTP reads for V2 sessions.
 - Retry/status events equivalent to V1 `session.status`.
