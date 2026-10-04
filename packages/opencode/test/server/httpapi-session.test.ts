@@ -817,6 +817,38 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "runs a v2 shell command over HTTP",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const session = yield* createSession({ title: "v2 shell" })
+
+        const shell = yield* request(`/api/session/${session.id}/shell`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ command: "echo shell-e2e" }),
+        })
+        expect(shell.status).toBe(204)
+
+        const message = yield* pollWithTimeout(
+          requestJson<{ data: Array<{ type: string; command?: string; output?: string }> }>(
+            `/api/session/${session.id}/message?order=asc`,
+            { headers },
+          ).pipe(
+            Effect.map((body) =>
+              body.data.find((item) => item.type === "shell" && item.output?.includes("shell-e2e")),
+            ),
+          ),
+          "shell message was not recorded",
+          "10 seconds",
+        )
+        expect(message?.command).toBe("echo shell-e2e")
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
     "returns v2 public unavailable errors for unfinished session mutations",
     () =>
       Effect.gen(function* () {

@@ -229,6 +229,25 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.shell", "/api/session/:sessionID/shell", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          id: SessionMessage.ID.pipe(Schema.optional),
+          command: Schema.String,
+        }),
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.shell",
+            summary: "Run shell command",
+            description: "Execute one shell command in the session location and record it as a shell message.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.get("session.queueList", "/api/session/:sessionID/queue", {
         params: { sessionID: Session.ID },
         success: Schema.Struct({ data: Schema.Array(SessionInput.Admitted) }),

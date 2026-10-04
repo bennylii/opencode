@@ -1071,7 +1071,15 @@ export function Prompt(props: PromptProps) {
     if (store.mode === "shell") {
       move.startSubmit()
       if (runtime === "v2") {
-        toast.show({ message: "Shell mode is not available for v2 sessions yet", variant: "warning" })
+        sdk.client.v2.session
+          .shell({ sessionID, command: inputText }, { throwOnError: true })
+          .catch((error) => {
+            toast.show({
+              title: "Failed to run command",
+              message: errorMessage(error),
+              variant: "error",
+            })
+          })
       } else {
         void sdk.client.session.shell({
           sessionID,

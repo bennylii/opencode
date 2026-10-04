@@ -1,7 +1,8 @@
 export * as SessionV2 from "./session"
 export * from "./session/schema"
 
-import { DateTime, Effect, Layer, Schema, Context, Stream } from "effect"
+import { DateTime, Duration, Effect, Layer, Schema, Context, Stream } from "effect"
+import { ChildProcess } from "effect/unstable/process"
 import { ListAnchor } from "@opencode-ai/schema/session"
 import { and, asc, desc, eq, gt, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
@@ -36,6 +37,7 @@ import { Snapshot } from "./snapshot"
 import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
 import { FSUtil } from "./fs-util"
+import { AppProcess } from "./process"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
 
 export const RevertState = Revert.State
@@ -181,11 +183,11 @@ export interface Interface {
     }) => Effect.Effect<void, NotFoundError>
   }
   readonly shell: (input: {
-    id?: EventV2.ID
+    id?: SessionMessage.ID
     sessionID: SessionSchema.ID
     command: string
     resume?: boolean
-  }) => Effect.Effect<void, OperationUnavailableError>
+  }) => Effect.Effect<void, NotFoundError>
   readonly skill: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -210,6 +212,9 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Session") {}
 
+const defaultShell = () => (process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/sh")
+const MAX_SHELL_CAPTURE_BYTES = 1024 * 1024
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -219,6 +224,7 @@ const layer = Layer.effect(
     const projects = yield* ProjectV2.Service
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
+    const appProcess = yield* AppProcess.Service
     const locations = yield* LocationServiceMap.Service
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
@@ -459,8 +465,35 @@ const layer = Layer.effect(
           yield* SessionInput.setQueuePolicy(db, events, input)
         }),
       },
-      shell: Effect.fn("V2Session.shell")(function* () {
-        return yield* new OperationUnavailableError({ operation: "shell" })
+      shell: Effect.fn("V2Session.shell")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        const messageID = input.id ? SessionMessage.ID.make(input.id) : SessionMessage.ID.create()
+        const callID = crypto.randomUUID()
+        yield* events.publish(SessionEvent.Shell.Started, {
+          sessionID: input.sessionID,
+          messageID,
+          callID,
+          command: input.command,
+          timestamp: yield* DateTime.now,
+        })
+        const command = ChildProcess.make(input.command, [], {
+          cwd: session.location.directory,
+          shell: defaultShell(),
+          stdin: "ignore",
+          detached: process.platform !== "win32",
+          forceKillAfter: Duration.seconds(3),
+        })
+        const settled = yield* appProcess
+          .run(command, { combineOutput: true, maxOutputBytes: MAX_SHELL_CAPTURE_BYTES })
+          .pipe(Effect.catchTag("AppProcessError", (error) => Effect.succeed(error)))
+        const output =
+          settled instanceof AppProcess.AppProcessError ? settled.message : (settled.output?.toString("utf8") ?? "")
+        yield* events.publish(SessionEvent.Shell.Ended, {
+          sessionID: input.sessionID,
+          callID,
+          output,
+          timestamp: yield* DateTime.now,
+        })
       }),
       skill: Effect.fn("V2Session.skill")(function* () {
         return yield* new OperationUnavailableError({ operation: "skill" })
@@ -555,6 +588,7 @@ export const node = makeGlobalNode({
     ProjectV2.node,
     SessionExecution.node,
     SessionStore.node,
+    AppProcess.node,
     LocationServiceMap.node,
     SessionProjector.node,
   ],
