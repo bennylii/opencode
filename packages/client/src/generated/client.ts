@@ -17,6 +17,8 @@ import type {
   SessionsSwitchModelOutput,
   SessionsPromptInput,
   SessionsPromptOutput,
+  SessionsCommandInput,
+  SessionsCommandOutput,
   SessionsShellInput,
   SessionsShellOutput,
   SessionsQueueListInput,
@@ -401,6 +403,25 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      command: (input: SessionsCommandInput, requestOptions?: RequestOptions) =>
+        request<SessionsCommandOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/command`,
+            body: {
+              id: input["id"],
+              command: input["command"],
+              arguments: input["arguments"],
+              agent: input["agent"],
+              model: input["model"],
+              files: input["files"],
+            },
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
       shell: (input: SessionsShellInput, requestOptions?: RequestOptions) =>
         request<SessionsShellOutput>(
           {

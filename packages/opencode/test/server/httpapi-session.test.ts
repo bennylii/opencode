@@ -2,7 +2,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { mkdir } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Cause, Config, Effect, Exit, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
@@ -939,6 +939,62 @@ describe("session HttpApi", () => {
           "10 seconds",
         )
       }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
+  it.instance(
+    "expands v2 slash commands over HTTP",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const session = yield* createSession({ title: "v2 command" })
+
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ name: string }> }>("/api/command", { headers }).pipe(
+            Effect.map((body) => (body.data.some((command) => command.name === "greet") ? true : undefined)),
+          ),
+          "command did not enter the catalog",
+          "10 seconds",
+        )
+
+        const run = yield* request(`/api/session/${session.id}/command`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ command: "greet", arguments: "World" }),
+        })
+        expect(run.status).toBe(204)
+
+        const message = yield* pollWithTimeout(
+          requestJson<{ data: Array<{ type: string; text?: string }> }>(
+            `/api/session/${session.id}/message?order=asc`,
+            { headers },
+          ).pipe(
+            Effect.map((body) =>
+              body.data.find((item) => item.type === "user" && item.text?.includes("Hello World")),
+            ),
+          ),
+          "expanded command prompt was not recorded",
+          "10 seconds",
+        )
+        expect(message?.text).toContain("interpolated")
+
+        const missing = yield* request(`/api/session/${session.id}/command`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ command: "nope" }),
+        })
+        expect(missing.status).toBe(400)
+      }),
+    {
+      git: true,
+      config: { formatter: false, lsp: false },
+      init: (directory) =>
+        Effect.promise(async () => {
+          const file = path.join(directory, ".opencode", "command", "greet.md")
+          await mkdir(path.dirname(file), { recursive: true })
+          await writeFile(file, "---\nagent: build\n---\nHello $1 !`echo interpolated`\n")
+        }),
+    },
   )
 
   it.instance(

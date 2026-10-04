@@ -33,6 +33,8 @@ import { LocationServiceMap } from "./location-service-map"
 import { MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
+import { CommandTemplate } from "./session/command-template"
+import { CommandV2 } from "./command"
 import { Snapshot } from "./snapshot"
 import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
@@ -94,6 +96,17 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Ses
   sessionID: SessionSchema.ID,
 }) {}
 
+export class CommandNotFoundError extends Schema.TaggedErrorClass<CommandNotFoundError>()(
+  "Session.CommandNotFoundError",
+  {
+    command: Schema.String,
+  },
+) {
+  override get message() {
+    return `Command not found: ${this.command}`
+  }
+}
+
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
   "Session.OperationUnavailableError",
   {
@@ -154,6 +167,15 @@ export interface Interface {
     intent?: SessionInput.Intent
     resume?: boolean
   }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
+  readonly command: (input: {
+    id?: SessionMessage.ID
+    sessionID: SessionSchema.ID
+    command: string
+    arguments?: string
+    agent?: AgentV2.ID
+    model?: ModelV2.Ref
+    files?: NonNullable<typeof PromptInput.Prompt.Type["files"]>
+  }) => Effect.Effect<void, NotFoundError | CommandNotFoundError>
   readonly queue: {
     readonly list: (
       sessionID: SessionSchema.ID,
@@ -428,6 +450,59 @@ const layer = Layer.effect(
           }),
         ),
       ),
+      command: Effect.fn("V2Session.command")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        const command = yield* CommandV2.Service.use((commands) => commands.get(input.command)).pipe(
+          Effect.provide(locations.get(session.location)),
+        )
+        if (!command) return yield* new CommandNotFoundError({ command: input.command })
+
+        const expanded = CommandTemplate.expandTemplate(command.template, input.arguments ?? "")
+        const matches = CommandTemplate.shellMatches(expanded)
+        const text =
+          matches.length === 0
+            ? expanded.trim()
+            : yield* Effect.gen(function* () {
+                const outputs: string[] = []
+                for (const shellCommand of matches) {
+                  const settled = yield* appProcess
+                    .run(
+                      ChildProcess.make(shellCommand, [], {
+                        cwd: session.location.directory,
+                        shell: defaultShell(),
+                        stdin: "ignore",
+                        detached: process.platform !== "win32",
+                        forceKillAfter: Duration.seconds(3),
+                      }),
+                      { combineOutput: true, maxOutputBytes: MAX_SHELL_CAPTURE_BYTES },
+                    )
+                    .pipe(Effect.catchTag("AppProcessError", (error) => Effect.succeed(error)))
+                  outputs.push(
+                    settled instanceof AppProcess.AppProcessError
+                      ? settled.message
+                      : (settled.output?.toString("utf8") ?? ""),
+                  )
+                }
+                return CommandTemplate.replaceShellMatches(expanded, outputs).trim()
+              })
+
+        const agent = command.agent ?? input.agent
+        const model = command.model ?? input.model
+        const intent: SessionInput.Intent = {
+          ...(agent && ["build", "edit", "plan", "yolo"].includes(agent)
+            ? { mode: agent as NonNullable<SessionInput.Intent["mode"]> }
+            : {}),
+          ...(model ? { model: { providerID: model.providerID, modelID: model.id, variant: model.variant } } : {}),
+        }
+        const admitted = yield* SessionInput.admit(db, events, {
+          id: input.id ?? SessionMessage.ID.create(),
+          sessionID: input.sessionID,
+          prompt: resolvePrompt({ text, ...(input.files && input.files.length > 0 ? { files: input.files } : {}) }),
+          delivery: "steer",
+          ...(Object.keys(intent).length > 0 ? { intent } : {}),
+        })
+        yield* execution.wake(admitted.sessionID)
+      }),
       queue: {
         list: Effect.fn("V2Session.queue.list")(function* (sessionID) {
           yield* result.get(sessionID)

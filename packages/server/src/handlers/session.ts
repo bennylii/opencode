@@ -6,6 +6,7 @@ import { SessionsCursor } from "@opencode-ai/protocol/groups/session"
 import {
   ConflictError,
   InvalidCursorError,
+  InvalidRequestError,
   MessageNotFoundError,
   ServiceUnavailableError,
   SessionNotFoundError,
@@ -168,6 +169,35 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 ),
               ),
           }
+        }),
+      )
+      .handle(
+        "session.command",
+        Effect.fn(function* (ctx) {
+          yield* session
+            .command({
+              sessionID: ctx.params.sessionID,
+              id: ctx.payload.id,
+              command: ctx.payload.command,
+              arguments: ctx.payload.arguments,
+              agent: ctx.payload.agent,
+              model: ctx.payload.model,
+              files: ctx.payload.files,
+            })
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+              Effect.catchTag("Session.CommandNotFoundError", (error) =>
+                Effect.fail(new InvalidRequestError({ message: error.message, kind: "command" })),
+              ),
+            )
+          return HttpApiSchema.NoContent.make()
         }),
       )
       .handle(

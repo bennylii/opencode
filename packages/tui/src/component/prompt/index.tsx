@@ -1105,7 +1105,28 @@ export function Prompt(props: PromptProps) {
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
       if (runtime === "v2") {
-        toast.show({ message: "Slash commands are not available for v2 sessions yet", variant: "warning" })
+        const files = nonTextParts.flatMap((part) =>
+          part.type === "file" ? [{ uri: part.url, mime: part.mime, name: part.filename }] : [],
+        )
+        sdk.client.v2.session
+          .command(
+            {
+              sessionID,
+              command: command.slice(1),
+              arguments: args,
+              agent: agent.name,
+              model: { id: selectedModel.modelID, providerID: selectedModel.providerID, variant },
+              ...(files.length > 0 ? { files } : {}),
+            },
+            { throwOnError: true },
+          )
+          .catch((error) => {
+            toast.show({
+              title: "Failed to run command",
+              message: errorMessage(error),
+              variant: "error",
+            })
+          })
       } else {
         void sdk.client.session.command({
           sessionID,
