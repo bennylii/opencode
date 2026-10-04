@@ -14,6 +14,8 @@ main TUI, without breaking existing V1 sessions.
 - [x] Phase 4 - automated end-to-end verification (HTTP queue smoke flow) and
       polish: paged v2 history, prompt budget indicator, v2 permission and
       question docks, retry status surfacing
+- [x] Post-phase - v2 `session.shell` endpoint (core execution, protocol, TUI `!`
+      shell mode)
 
 The manual `bun dev` smoke is replaced by
 `packages/opencode/test/server/httpapi-session.test.ts` "runs an end-to-end v2
@@ -146,7 +148,6 @@ Commit: `feat(tui): submit v2 prompts with intent and queue delivery`
 These V2 protocol/core gaps must be filled before removing the TUI V2-session
 restrictions:
 
-- `session.shell` (core stub returns `OperationUnavailableError`).
 - Slash-command invocation endpoint (V2 only lists commands).
 - Session fork, share/unshare, rename/update, delete at the V2 layer.
 - Real `session.compact` (currently a 503 stub) and `session.wait`.
