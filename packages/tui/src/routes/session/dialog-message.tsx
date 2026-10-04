@@ -4,6 +4,7 @@ import { DialogSelect } from "../../ui/dialog-select"
 import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
 import { useClipboard } from "../../context/clipboard"
+import { useData } from "../../context/data"
 import type { PromptInfo } from "../../component/prompt/history"
 import { stripPromptPartIDs as strip } from "../../prompt/part"
 
@@ -14,6 +15,7 @@ export function DialogMessage(props: {
 }) {
   const sync = useSync()
   const sdk = useSDK()
+  const data = useData()
   const message = createMemo(() => sync.data.message[props.sessionID]?.find((x) => x.id === props.messageID))
   const route = useRoute()
   const clipboard = useClipboard()
@@ -78,10 +80,6 @@ export function DialogMessage(props: {
           value: "session.fork",
           description: "create a new session",
           onSelect: async (dialog) => {
-            const result = await sdk.client.session.fork({
-              sessionID: props.sessionID,
-              messageID: props.messageID,
-            })
             const msg = message()
             const prompt = msg
               ? sync.data.part[msg.id].reduce(
@@ -95,11 +93,28 @@ export function DialogMessage(props: {
                   { input: "", parts: [] as PromptInfo["parts"] },
                 )
               : undefined
-            route.navigate({
-              sessionID: result.data!.id,
-              type: "session",
-              prompt,
-            })
+            if (data.session.get(props.sessionID)?.runtime === "v2") {
+              const result = await sdk.client.v2.session.fork({
+                sessionID: props.sessionID,
+                messageID: props.messageID,
+              })
+              if (result.data)
+                route.navigate({
+                  sessionID: result.data.data.id,
+                  type: "session",
+                  prompt,
+                })
+            } else {
+              const result = await sdk.client.session.fork({
+                sessionID: props.sessionID,
+                messageID: props.messageID,
+              })
+              route.navigate({
+                sessionID: result.data!.id,
+                type: "session",
+                prompt,
+              })
+            }
             dialog.clear()
           },
         },

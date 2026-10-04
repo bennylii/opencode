@@ -998,6 +998,67 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "forks a v2 session over HTTP",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const created = yield* requestJson<{ data: { id: string; title: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ location: { directory: test.directory } }),
+        })
+
+        yield* request(`/api/session/${created.data.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "fork me" } }),
+        })
+        const message = yield* pollWithTimeout(
+          requestJson<{ data: Array<{ id: string; type: string; text?: string }> }>(
+            `/api/session/${created.data.id}/message?order=asc`,
+            { headers },
+          ).pipe(
+            Effect.map((body) => body.data.find((item) => item.type === "user" && item.text === "fork me")),
+          ),
+          "source message was not recorded",
+          "10 seconds",
+        )
+
+        const forked = yield* requestJson<{ data: { id: string; title: string } }>(
+          `/api/session/${created.data.id}/fork`,
+          { method: "POST", headers, body: JSON.stringify({}) },
+        )
+        expect(forked.data.id).not.toBe(created.data.id)
+        expect(forked.data.title).toContain("(fork #1)")
+        const forkedMessages = yield* requestJson<{ data: Array<{ type: string; text?: string }> }>(
+          `/api/session/${forked.data.id}/message?order=asc`,
+          { headers },
+        )
+        expect(forkedMessages.data.some((item) => item.type === "user" && item.text === "fork me")).toBe(true)
+
+        const partial = yield* requestJson<{ data: { id: string } }>(`/api/session/${created.data.id}/fork`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ messageID: message!.id }),
+        })
+        const partialMessages = yield* requestJson<{ data: Array<{ type: string; text?: string }> }>(
+          `/api/session/${partial.data.id}/message?order=asc`,
+          { headers },
+        )
+        expect(partialMessages.data.some((item) => item.type === "user" && item.text === "fork me")).toBe(true)
+
+        const missing = yield* request(`/api/session/${created.data.id}/fork`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ messageID: "msg_missing" }),
+        })
+        expect(missing.status).toBe(404)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
     "returns safe v2 unknown errors for corrupt projected messages",
     () =>
       Effect.gen(function* () {

@@ -4,7 +4,7 @@ export * from "./session/schema"
 import { DateTime, Duration, Effect, Layer, Schema, Context, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { ListAnchor } from "@opencode-ai/schema/session"
-import { and, asc, desc, eq, gt, like, lt, or, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, gt, like, lt, lte, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -13,6 +13,7 @@ import { SessionMessage } from "./session/message"
 import { Prompt } from "./session/prompt"
 import { PromptInput } from "@opencode-ai/schema/prompt-input"
 import { EventV2 } from "./event"
+import { EventSequenceTable } from "./event/sql"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
 import { SessionMessageTable, SessionTable } from "./session/sql"
@@ -85,6 +86,7 @@ type CreateInput = {
   agent?: AgentV2.ID
   model?: ModelV2.Ref
   location: Location.Ref
+  title?: string
 }
 
 type CompactInput = {
@@ -128,6 +130,10 @@ export type Error = NotFoundError | MessageDecodeError | OperationUnavailableErr
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
   readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
+  readonly fork: (input: {
+    sessionID: SessionSchema.ID
+    messageID?: SessionMessage.ID
+  }) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -237,6 +243,12 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/v2
 const defaultShell = () => (process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/sh")
 const MAX_SHELL_CAPTURE_BYTES = 1024 * 1024
 
+function getForkedTitle(title: string) {
+  const match = title.match(/^(.+) \(fork #(\d+)\)$/)
+  if (match) return `${match[1]} (fork #${parseInt(match[2]!, 10) + 1})`
+  return `${title} (fork #1)`
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -282,7 +294,7 @@ const layer = Layer.effect(
           directory: input.location.directory,
           path: path.relative(project.directory, input.location.directory).replaceAll("\\", "/"),
           workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
-          title: `New session - ${new Date(now).toISOString()}`,
+          title: input.title ?? `New session - ${new Date(now).toISOString()}`,
           agent: input.agent,
           model: input.model
             ? {
@@ -323,6 +335,66 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
         return yield* result.get(sessionID).pipe(Effect.orDie)
+      }),
+      fork: Effect.fn("V2Session.fork")(function* (input) {
+        const source = yield* result.get(input.sessionID)
+        const cutoff = input.messageID
+          ? yield* db
+              .select({ seq: SessionMessageTable.seq })
+              .from(SessionMessageTable)
+              .where(
+                and(
+                  eq(SessionMessageTable.id, input.messageID),
+                  eq(SessionMessageTable.session_id, source.id),
+                ),
+              )
+              .get()
+              .pipe(Effect.orDie)
+          : undefined
+        if (input.messageID && !cutoff)
+          return yield* new MessageNotFoundError({ sessionID: source.id, messageID: input.messageID })
+        const created = yield* result.create({
+          location: source.location,
+          agent: source.agent,
+          model: source.model,
+          title: getForkedTitle(source.title),
+        })
+        // 消息表主键是全局的，fork 必须为复制出的消息分配新 ID。
+        const messages = yield* db
+          .select()
+          .from(SessionMessageTable)
+          .where(
+            and(eq(SessionMessageTable.session_id, source.id), cutoff ? lte(SessionMessageTable.seq, cutoff.seq) : undefined),
+          )
+          .orderBy(asc(SessionMessageTable.seq))
+          .all()
+          .pipe(Effect.orDie)
+        for (const row of messages) {
+          yield* db
+            .insert(SessionMessageTable)
+            .values({
+              id: SessionMessage.ID.create(),
+              session_id: created.id,
+              type: row.type,
+              seq: row.seq,
+              time_created: row.time_created,
+              data: row.type === "synthetic" ? { ...row.data, sessionID: created.id } : row.data,
+            } as typeof SessionMessageTable.$inferInsert)
+            .run()
+            .pipe(Effect.orDie)
+        }
+        // TODO: Fork the durable event history once replay can remap message IDs.
+        // Advance the aggregate sequence so post-fork events append after copied messages.
+        const latest = messages.at(-1)?.seq ?? -1
+        if (latest > (yield* EventV2.latestSequence(db, created.id))) {
+          yield* db
+            .update(EventSequenceTable)
+            .set({ seq: latest })
+            .where(eq(EventSequenceTable.aggregate_id, created.id))
+            .run()
+            .pipe(Effect.orDie)
+        }
+        return created
       }),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
         const session = yield* store.get(sessionID)
