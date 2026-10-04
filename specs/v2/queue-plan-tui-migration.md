@@ -16,6 +16,7 @@ main TUI, without breaking existing V1 sessions.
       question docks, retry status surfacing
 - [x] Post-phase - v2 `session.shell` endpoint (core execution, protocol, TUI `!`
       shell mode)
+- [x] Post-phase - v2 manual compaction (`/compact`)
 
 The manual `bun dev` smoke is replaced by
 `packages/opencode/test/server/httpapi-session.test.ts` "runs an end-to-end v2
@@ -150,7 +151,7 @@ restrictions:
 
 - Slash-command invocation endpoint (V2 only lists commands).
 - Session fork, share/unshare, rename/update, delete at the V2 layer.
-- Real `session.compact` (currently a 503 stub) and `session.wait`.
+- `session.wait` (still a 503 stub).
 - Todo and diff HTTP reads for V2 sessions.
 - Retry/status events equivalent to V1 `session.status`.
 - Tool parity: `task`, diagnostics, and complete `structured` -> TUI metadata
