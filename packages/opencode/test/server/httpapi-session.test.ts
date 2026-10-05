@@ -1134,6 +1134,112 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
   )
 
+  it.live(
+    "continues, queues and reverts on a forked v2 session",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const config = {
+          formatter: false,
+          lsp: false,
+          providers: {
+            test: {
+              name: "Test",
+              api: { type: "aisdk", package: "@ai-sdk/openai-compatible", url: llm.url },
+              request: { body: { apiKey: "test-key" } },
+              models: {
+                "test-model": {
+                  name: "Test Model",
+                  limit: { context: 100_000, output: 10_000 },
+                  cost: { input: 0, output: 0 },
+                },
+              },
+            },
+          },
+        }
+        const directory = yield* tmpdirScoped({ git: true, config })
+        const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ providerID: string; id: string }> }>("/api/model", { headers }).pipe(
+            Effect.map((body) =>
+              body.data.some((model) => model.providerID === "test" && model.id === "test-model")
+                ? true
+                : undefined,
+            ),
+          ),
+          "test model did not enter the catalog",
+          "10 seconds",
+        )
+
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            location: { directory },
+            agent: "build",
+            model: { id: "test-model", providerID: "test" },
+          }),
+        })
+        const sessionID = created.data.id
+
+        yield* request(`/api/session/${sessionID}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "root message" } }),
+        })
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ type: string; text?: string }> }>(`/api/session/${sessionID}/message?order=asc`, {
+            headers,
+          }).pipe(Effect.map((body) => (body.data.some((item) => item.text === "root message") ? true : undefined))),
+          "root message was not recorded",
+          "10 seconds",
+        )
+
+        const forked = yield* requestJson<{ data: { id: string } }>(`/api/session/${sessionID}/fork`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({}),
+        })
+
+        yield* request(`/api/session/${forked.data.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "forked follow-up" } }),
+        })
+        const forkedUser = yield* pollWithTimeout(
+          requestJson<{ data: Array<{ id: string; type: string; text?: string }> }>(
+            `/api/session/${forked.data.id}/message?order=asc`,
+            { headers },
+          ).pipe(Effect.map((body) => body.data.find((item) => item.type === "user" && item.text === "forked follow-up"))),
+          "forked follow-up was not recorded",
+          "10 seconds",
+        )
+
+        yield* requestJson<{ data: { id: string } }>(`/api/session/${forked.data.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "queued on fork" }, delivery: "queue" }),
+        })
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ type: string; text?: string }> }>(
+            `/api/session/${forked.data.id}/message?order=asc`,
+            { headers },
+          ).pipe(Effect.map((body) => (body.data.some((item) => item.text === "queued on fork") ? true : undefined))),
+          "queued fork input was not promoted",
+          "10 seconds",
+        )
+
+        const staged = yield* requestJson<{ data: { messageID: string } }>(
+          `/api/session/${forked.data.id}/revert/stage`,
+          { method: "POST", headers, body: JSON.stringify({ messageID: forkedUser.id }) },
+        )
+        expect(staged.data.messageID).toBe(forkedUser.id)
+        const cleared = yield* request(`/api/session/${forked.data.id}/revert/clear`, { method: "POST", headers })
+        expect(cleared.status).toBe(204)
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
   it.instance(
     "stages and clears a v2 revert over HTTP",
     () =>
