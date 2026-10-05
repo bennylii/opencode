@@ -180,6 +180,7 @@ export function Prompt(props: PromptProps) {
   const kv = useKV()
   const data = useData()
   const [contextBudget] = kv.signal<number>("context_budget", 0)
+  const promptRuntime = createMemo(() => (props.sessionID ? data.session.get(props.sessionID)?.runtime : undefined))
   const animationsEnabled = createMemo(() => kv.get("animations_enabled", true))
   const list = createMemo(() => props.placeholders?.normal ?? [])
   const shell = createMemo(() => props.placeholders?.shell ?? [])
@@ -403,7 +404,7 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         hidden: true,
-        enabled: status().type !== "idle",
+        enabled: status().type !== "idle" || promptRuntime() === "v2",
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
@@ -421,9 +422,13 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
-            })
+            if (promptRuntime() === "v2") {
+              void sdk.client.v2.session.interrupt({ sessionID: props.sessionID })
+            } else {
+              void sdk.client.session.abort({
+                sessionID: props.sessionID,
+              })
+            }
             setStore("interrupt", 0)
           }
           dialog.clear()
