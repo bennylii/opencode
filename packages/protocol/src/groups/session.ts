@@ -190,6 +190,22 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.patch("session.update", "/api/session/:sessionID", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ title: Schema.String }),
+        success: Schema.Struct({ data: Session.Info }),
+        error: [SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.update",
+            summary: "Update session",
+            description: "Update session metadata such as the title.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.delete("session.remove", "/api/session/:sessionID", {
         params: { sessionID: Session.ID },
         success: Schema.Struct({ data: Schema.Boolean }),

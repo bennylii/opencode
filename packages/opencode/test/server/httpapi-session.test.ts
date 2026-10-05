@@ -1145,6 +1145,42 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "renames a v2 session over HTTP",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const created = yield* requestJson<{ data: { id: string; title: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ location: { directory: test.directory } }),
+        })
+
+        const updated = yield* requestJson<{ data: { title: string } }>(`/api/session/${created.data.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ title: "Renamed" }),
+        })
+        expect(updated.data.title).toBe("Renamed")
+
+        const fetched = yield* requestJson<{ data: { title: string; runtime: string } }>(
+          `/api/session/${created.data.id}`,
+          { headers },
+        )
+        expect(fetched.data.title).toBe("Renamed")
+        expect(fetched.data.runtime).toBe("v2")
+
+        const missing = yield* request(`/api/session/ses_missing`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ title: "x" }),
+        })
+        expect(missing.status).toBe(404)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
     "returns safe v2 unknown errors for corrupt projected messages",
     () =>
       Effect.gen(function* () {

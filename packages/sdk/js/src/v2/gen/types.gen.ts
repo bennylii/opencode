@@ -11797,6 +11797,45 @@ export type V2SessionGetResponses = {
 
 export type V2SessionGetResponse = V2SessionGetResponses[keyof V2SessionGetResponses]
 
+export type V2SessionUpdateData = {
+  body: {
+    title: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}"
+}
+
+export type V2SessionUpdateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionUpdateError = V2SessionUpdateErrors[keyof V2SessionUpdateErrors]
+
+export type V2SessionUpdateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionV2Info
+  }
+}
+
+export type V2SessionUpdateResponse = V2SessionUpdateResponses[keyof V2SessionUpdateResponses]
+
 export type V2SessionForkData = {
   body: {
     messageID?: string

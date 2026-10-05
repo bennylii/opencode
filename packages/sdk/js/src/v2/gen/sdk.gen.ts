@@ -406,6 +406,8 @@ import type {
   V2SessionSwitchAgentResponses,
   V2SessionSwitchModelErrors,
   V2SessionSwitchModelResponses,
+  V2SessionUpdateErrors,
+  V2SessionUpdateResponses,
   V2SessionWaitErrors,
   V2SessionWaitResponses,
   V2SkillListErrors,
@@ -5800,6 +5802,41 @@ export class Session3 extends HeyApiClient {
       url: "/api/session/{sessionID}",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Update session
+   *
+   * Update session metadata such as the title.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      title?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "title" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<V2SessionUpdateResponses, V2SessionUpdateErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 

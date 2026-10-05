@@ -135,6 +135,7 @@ export interface Interface {
     messageID?: SessionMessage.ID
   }) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError>
   readonly remove: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+  readonly update: (input: { sessionID: SessionSchema.ID; title: string }) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -414,6 +415,22 @@ const layer = Layer.effect(
         if (!row) return yield* new NotFoundError({ sessionID })
         yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: toV1Info(row) }, { location: session.location })
         yield* events.remove(sessionID)
+      }),
+      update: Effect.fn("V2Session.update")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        const row = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, input.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!row) return yield* new NotFoundError({ sessionID: input.sessionID })
+        yield* events.publish(
+          SessionV1.Event.Updated,
+          { sessionID: input.sessionID, info: { ...toV1Info(row), title: input.title } },
+          { location: session.location },
+        )
+        return yield* result.get(input.sessionID)
       }),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
         const session = yield* store.get(sessionID)

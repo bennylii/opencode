@@ -13,6 +13,8 @@ import type {
   SessionsGetOutput,
   SessionsForkInput,
   SessionsForkOutput,
+  SessionsUpdateInput,
+  SessionsUpdateOutput,
   SessionsRemoveInput,
   SessionsRemoveOutput,
   SessionsSwitchAgentInput,
@@ -371,6 +373,18 @@ export function make(options: ClientOptions) {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/fork`,
             body: { messageID: input["messageID"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      update: (input: SessionsUpdateInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsUpdateOutput }>(
+          {
+            method: "PATCH",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}`,
+            body: { title: input["title"] },
             successStatus: 200,
             declaredStatuses: [404, 400, 401],
             empty: false,
