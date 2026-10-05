@@ -42,14 +42,18 @@ function normalizeInput(name: string, input: Record<string, unknown>) {
 }
 
 /** Map v2 `structured` output back to the metadata keys the TUI tool renderers expect. */
-function toolMetadata(name: string, structured: Record<string, unknown>, content: ReadonlyArray<{ type: string }>) {
+function toolMetadata(
+  name: string,
+  input: Record<string, unknown>,
+  structured: Record<string, unknown>,
+  content: ReadonlyArray<{ type: string }>,
+) {
   const text = contentText(content)
   const base = typeof structured === "object" && structured !== null ? structured : {}
   switch (name) {
     case "bash":
       return { ...base, output: typeof base["output"] === "string" ? base["output"] : text }
-    case "edit":
-    case "apply_patch": {
+    case "edit": {
       const files = Array.isArray(base["files"]) ? base["files"] : []
       const diff = files
         .flatMap((file) =>
@@ -60,10 +64,38 @@ function toolMetadata(name: string, structured: Record<string, unknown>, content
         .join("\n")
       return { ...base, ...(diff ? { diff } : {}), ...(text ? { output: text } : {}) }
     }
+    case "apply_patch": {
+      const applied = Array.isArray(base["applied"]) ? base["applied"] : []
+      const files = Array.isArray(base["files"]) ? base["files"] : []
+      const mapped = files.flatMap((file, index) => {
+        if (!file || typeof file !== "object") return []
+        const info = file as { file?: unknown; patch?: unknown; deletions?: unknown }
+        const relativePath = typeof info.file === "string" ? info.file : undefined
+        if (!relativePath) return []
+        const operation = (applied[index] as { type?: unknown } | undefined)?.type
+        const type = operation === "add" ? "add" : operation === "delete" ? "delete" : "update"
+        return [
+          {
+            type,
+            relativePath,
+            filePath: relativePath,
+            patch: typeof info.patch === "string" ? info.patch : "",
+            deletions: typeof info.deletions === "number" ? info.deletions : 0,
+          },
+        ]
+      })
+      return { ...base, ...(mapped.length > 0 ? { files: mapped } : {}), ...(text ? { output: text } : {}) }
+    }
     case "grep":
       return { ...base, ...(Array.isArray(structured) ? { matches: structured.length } : {}), output: text }
     case "glob":
       return { ...base, ...(Array.isArray(structured) ? { count: structured.length } : {}), output: text }
+    case "websearch":
+      return {
+        ...base,
+        ...(typeof input["numResults"] === "number" ? { numResults: input["numResults"] } : {}),
+        output: text,
+      }
     default:
       return { ...base, ...(text ? { output: text } : {}) }
   }
@@ -78,7 +110,7 @@ function toolState(item: SessionMessageAssistantTool, start: number, end: number
       return {
         status: "running",
         input: normalizeInput(item.name, state.input),
-        metadata: toolMetadata(item.name, state.structured, state.content),
+        metadata: toolMetadata(item.name, state.input, state.structured, state.content),
         time: { start },
       }
     case "completed":
@@ -87,7 +119,7 @@ function toolState(item: SessionMessageAssistantTool, start: number, end: number
         input: normalizeInput(item.name, state.input),
         output: contentText(state.content),
         title: item.name,
-        metadata: toolMetadata(item.name, state.structured, state.content),
+        metadata: toolMetadata(item.name, state.input, state.structured, state.content),
         time: { start, end },
       }
     case "error":
@@ -95,7 +127,7 @@ function toolState(item: SessionMessageAssistantTool, start: number, end: number
         status: "error",
         input: normalizeInput(item.name, state.input),
         error: state.error.message,
-        metadata: toolMetadata(item.name, state.structured, state.content),
+        metadata: toolMetadata(item.name, state.input, state.structured, state.content),
         time: { start, end },
       }
   }

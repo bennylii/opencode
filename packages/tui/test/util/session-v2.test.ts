@@ -110,4 +110,60 @@ describe("projectSessionMessages", () => {
       expect(tool.callID).toBe("call_shell")
     }
   })
+
+  test("maps apply_patch and websearch metadata for the tool renderers", () => {
+    const projected = projectSessionMessages(sessionID, [
+      { type: "user", id: "msg_user_tools", time: { created: 1 }, text: "apply and search" },
+      {
+        type: "assistant",
+        id: "msg_tools",
+        time: { created: 1, completed: 2 },
+        agent: "build",
+        model: { id: "gpt", providerID: "openai" },
+        content: [
+          {
+            type: "tool",
+            id: "call_patch",
+            name: "apply_patch",
+            state: {
+              status: "completed",
+              input: { patchText: "*** Begin Patch" },
+              content: [{ type: "text", text: "Applied patch sequentially: M src/a.ts" }],
+              structured: {
+                applied: [{ type: "update", resource: "src/a.ts", target: "src/a.ts" }],
+                files: [{ file: "src/a.ts", patch: "--- a\n+++ b", additions: 1, deletions: 1 }],
+              },
+            },
+            time: { created: 1, ran: 1, completed: 2 },
+          },
+          {
+            type: "tool",
+            id: "call_search",
+            name: "websearch",
+            state: {
+              status: "completed",
+              input: { query: "news", numResults: 5 },
+              content: [{ type: "text", text: "results" }],
+              structured: { provider: "exa", text: "results" },
+            },
+            time: { created: 1, ran: 1, completed: 2 },
+          },
+        ],
+      },
+    ])
+
+    const parts = projected.parts.get("msg_tools")!
+    const patch = parts.find((part) => part.type === "tool" && part.tool === "apply_patch")
+    expect(patch?.type).toBe("tool")
+    if (patch?.type === "tool" && patch.state.status === "completed") {
+      expect(patch.state.metadata).toMatchObject({
+        files: [{ type: "update", relativePath: "src/a.ts", filePath: "src/a.ts", patch: "--- a\n+++ b", deletions: 1 }],
+      })
+    }
+    const search = parts.find((part) => part.type === "tool" && part.tool === "websearch")
+    expect(search?.type).toBe("tool")
+    if (search?.type === "tool" && search.state.status === "completed") {
+      expect(search.state.metadata).toMatchObject({ provider: "exa", numResults: 5 })
+    }
+  })
 })
