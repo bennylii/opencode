@@ -42,6 +42,7 @@ import { Snapshot } from "./snapshot"
 import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
 import { FSUtil } from "./fs-util"
+import { File } from "./file"
 import { AppProcess } from "./process"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
 
@@ -138,6 +139,10 @@ export interface Interface {
   }) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError>
   readonly remove: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly update: (input: { sessionID: SessionSchema.ID; title: string }) => Effect.Effect<SessionSchema.Info, NotFoundError>
+  readonly diff: (input: {
+    sessionID: SessionSchema.ID
+    messageID?: SessionMessage.ID
+  }) => Effect.Effect<File.Diff[], NotFoundError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -739,6 +744,20 @@ const layer = Layer.effect(
       interrupt: Effect.fn("V2Session.interrupt")((sessionID) =>
         Effect.uninterruptible(execution.interrupt(sessionID)),
       ),
+      diff: Effect.fn("V2Session.diff")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        const messages = yield* result
+          .messages({ sessionID: input.sessionID, order: "asc" })
+          .pipe(Effect.catchTag("Session.MessageDecodeError", () => Effect.succeed([])))
+        const range = turnSnapshots(messages, input.messageID)
+        if (!range) return []
+        return yield* Snapshot.Service.use((snapshot) =>
+          snapshot.diff({ from: Snapshot.ID.make(range.from), to: Snapshot.ID.make(range.to) }).pipe(
+            Effect.map((diffs) => [...diffs]),
+            Effect.catch(() => Effect.succeed([])),
+          ),
+        ).pipe(Effect.provide(locations.get(session.location)))
+      }),
       revert: {
         stage: Effect.fn("V2Session.revert.stage")(function* (input) {
           const session = yield* result.get(input.sessionID)
@@ -765,6 +784,28 @@ const layer = Layer.effect(
     return result
   }),
 )
+
+/** Pick the snapshot range for a turn: the first start and last end of its assistants. */
+function turnSnapshots(messages: SessionMessage.Message[], messageID?: SessionMessage.ID) {
+  const scoped = (() => {
+    if (!messageID) return messages
+    const index = messages.findIndex((message) => message.id === messageID)
+    if (index === -1) return []
+    if (messages[index]!.type !== "user") return [messages[index]!]
+    const next = messages.findIndex((message, i) => i > index && message.type === "user")
+    return messages.slice(index, next === -1 ? undefined : next)
+  })()
+  const starts = scoped.flatMap((message) =>
+    message.type === "assistant" && message.snapshot?.start ? [message.snapshot.start] : [],
+  )
+  const ends = scoped.flatMap((message) =>
+    message.type === "assistant" && message.snapshot?.end ? [message.snapshot.end] : [],
+  )
+  const from = starts[0]
+  const to = ends[ends.length - 1]
+  if (!from || !to || from === to) return undefined
+  return { from, to }
+}
 
 const resolvePrompt = (input: PromptInput.Prompt) =>
   Prompt.make({

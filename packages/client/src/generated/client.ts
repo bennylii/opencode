@@ -17,6 +17,8 @@ import type {
   SessionsUpdateOutput,
   SessionsRemoveInput,
   SessionsRemoveOutput,
+  SessionsDiffInput,
+  SessionsDiffOutput,
   SessionsSwitchAgentInput,
   SessionsSwitchAgentOutput,
   SessionsSwitchModelInput,
@@ -396,6 +398,18 @@ export function make(options: ClientOptions) {
           {
             method: "DELETE",
             path: `/api/session/${encodeURIComponent(input.sessionID)}`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      diff: (input: SessionsDiffInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsDiffOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/diff`,
+            query: { messageID: input["messageID"] },
             successStatus: 200,
             declaredStatuses: [404, 400, 401],
             empty: false,

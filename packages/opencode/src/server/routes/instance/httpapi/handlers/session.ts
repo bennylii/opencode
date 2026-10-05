@@ -13,6 +13,8 @@ import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
+import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
@@ -58,6 +60,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const statusSvc = yield* SessionStatus.Service
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
+    const sessionV2 = yield* SessionV2.Service
     const events = yield* EventV2Bridge.Service
     const scope = yield* Scope.Scope
 
@@ -100,6 +103,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       query: typeof DiffQuery.Type
     }) {
+      const info = yield* sessionV2.get(ctx.params.sessionID).pipe(Effect.option)
+      if (info._tag === "Some" && info.value.runtime === "v2") {
+        const diffs = yield* sessionV2
+          .diff({
+            sessionID: ctx.params.sessionID,
+            messageID: ctx.query.messageID ? SessionMessage.ID.make(ctx.query.messageID) : undefined,
+          })
+          .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed([])))
+        return diffs.map((item) => ({ ...item, file: item.path }))
+      }
       return yield* summary.diff({ sessionID: ctx.params.sessionID, messageID: ctx.query.messageID })
     })
 

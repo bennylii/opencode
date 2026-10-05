@@ -941,6 +941,80 @@ describe("session HttpApi", () => {
       }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
   )
 
+  it.live(
+    "serves v2 session diffs over HTTP and through the v1 bridge",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const config = {
+          formatter: false,
+          lsp: false,
+          providers: {
+            test: {
+              name: "Test",
+              api: { type: "aisdk", package: "@ai-sdk/openai-compatible", url: llm.url },
+              request: { body: { apiKey: "test-key" } },
+              models: {
+                "test-model": {
+                  name: "Test Model",
+                  limit: { context: 100_000, output: 10_000 },
+                  cost: { input: 0, output: 0 },
+                },
+              },
+            },
+          },
+        }
+        const directory = yield* tmpdirScoped({ git: true, config })
+        const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ providerID: string; id: string }> }>("/api/model", { headers }).pipe(
+            Effect.map((body) =>
+              body.data.some((model) => model.providerID === "test" && model.id === "test-model")
+                ? true
+                : undefined,
+            ),
+          ),
+          "test model did not enter the catalog",
+          "10 seconds",
+        )
+
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            location: { directory },
+            agent: "build",
+            model: { id: "test-model", providerID: "test" },
+          }),
+        })
+        const sessionID = created.data.id
+
+        yield* llm.tool("write", { path: "notes.txt", content: "hello from v2\n" })
+        yield* request(`/api/session/${sessionID}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "write a file" } }),
+        })
+
+        const diff = yield* pollWithTimeout(
+          requestJson<{ data: Array<{ path: string; status: string; patch: string }> }>(
+            `/api/session/${sessionID}/diff`,
+            { headers },
+          ).pipe(Effect.map((body) => (body.data.length > 0 ? body : undefined))),
+          "v2 diff was not produced",
+          "15 seconds",
+        )
+        expect(diff.data.some((item) => item.path === "notes.txt" && item.patch.includes("hello from v2"))).toBe(true)
+
+        const bridged = yield* requestJson<Array<{ file?: string; patch?: string }>>(
+          pathFor(SessionPaths.diff, { sessionID }),
+          { headers },
+        )
+        expect(bridged.some((item) => item.file === "notes.txt")).toBe(true)
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
   it.instance(
     "expands v2 slash commands over HTTP",
     () =>
