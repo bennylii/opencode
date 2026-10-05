@@ -965,7 +965,7 @@ describe("session HttpApi", () => {
         expect(run.status).toBe(204)
 
         const message = yield* pollWithTimeout(
-          requestJson<{ data: Array<{ type: string; text?: string }> }>(
+          requestJson<{ data: Array<{ type: string; text?: string; files?: Array<{ uri: string; name?: string }> }> }>(
             `/api/session/${session.id}/message?order=asc`,
             { headers },
           ).pipe(
@@ -977,6 +977,7 @@ describe("session HttpApi", () => {
           "10 seconds",
         )
         expect(message?.text).toContain("interpolated")
+        expect(message?.files?.some((file) => file.name === "notes.txt" || file.uri.endsWith("notes.txt"))).toBe(true)
 
         const missing = yield* request(`/api/session/${session.id}/command`, {
           method: "POST",
@@ -992,7 +993,8 @@ describe("session HttpApi", () => {
         Effect.promise(async () => {
           const file = path.join(directory, ".opencode", "command", "greet.md")
           await mkdir(path.dirname(file), { recursive: true })
-          await writeFile(file, "---\nagent: build\n---\nHello $1 !`echo interpolated`\n")
+          await writeFile(file, "---\nagent: build\n---\nHello $1 !`echo interpolated` @notes.txt\n")
+          await writeFile(path.join(directory, "notes.txt"), "attached note\n")
         }),
     },
   )

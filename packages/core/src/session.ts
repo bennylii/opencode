@@ -2,6 +2,7 @@ export * as SessionV2 from "./session"
 export * from "./session/schema"
 
 import { DateTime, Duration, Effect, Layer, Schema, Context, Stream } from "effect"
+import { pathToFileURL } from "url"
 import { ChildProcess } from "effect/unstable/process"
 import { ListAnchor } from "@opencode-ai/schema/session"
 import { and, asc, desc, eq, gt, like, lt, lte, or, type SQL } from "drizzle-orm"
@@ -14,6 +15,7 @@ import { Prompt } from "./session/prompt"
 import { PromptInput } from "@opencode-ai/schema/prompt-input"
 import { EventV2 } from "./event"
 import { EventSequenceTable } from "./event/sql"
+import { Global } from "./global"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
 import { SessionMessageTable, SessionTable } from "./session/sql"
@@ -261,6 +263,7 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
     const appProcess = yield* AppProcess.Service
+    const fsys = yield* FSUtil.Service
     const locations = yield* LocationServiceMap.Service
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
@@ -602,10 +605,23 @@ const layer = Layer.effect(
             : {}),
           ...(model ? { model: { providerID: model.providerID, modelID: model.id, variant: model.variant } } : {}),
         }
+        const files = [...(input.files ?? [])]
+        const seen = new Set(files.map((file) => file.uri))
+        const project = yield* projects.resolve(session.location.directory)
+        for (const mention of new Set(CommandTemplate.fileMentions(text))) {
+          const filepath = mention.startsWith("~/")
+            ? path.join(Global.Path.home, mention.slice(2))
+            : path.resolve(project.directory, mention)
+          if (!(yield* fsys.existsSafe(filepath))) continue
+          const uri = pathToFileURL(filepath).href
+          if (seen.has(uri)) continue
+          seen.add(uri)
+          files.push({ uri, name: mention })
+        }
         const admitted = yield* SessionInput.admit(db, events, {
           id: input.id ?? SessionMessage.ID.create(),
           sessionID: input.sessionID,
-          prompt: resolvePrompt({ text, ...(input.files && input.files.length > 0 ? { files: input.files } : {}) }),
+          prompt: resolvePrompt({ text, ...(files.length > 0 ? { files } : {}) }),
           delivery: "steer",
           ...(Object.keys(intent).length > 0 ? { intent } : {}),
         })
@@ -774,6 +790,7 @@ export const node = makeGlobalNode({
     SessionExecution.node,
     SessionStore.node,
     AppProcess.node,
+    FSUtil.node,
     LocationServiceMap.node,
     SessionProjector.node,
   ],

@@ -27,4 +27,11 @@ describe("CommandTemplate", () => {
     expect(CommandTemplate.shellMatches(template)).toEqual(["echo one", "echo two"])
     expect(CommandTemplate.replaceShellMatches(template, ["ONE", "TWO"])).toBe("before ONE middle TWO after")
   })
+
+  test("extracts file mentions without matching emails", () => {
+    expect(CommandTemplate.fileMentions("read @src/a.ts and @~/notes.md mail a@b.com")).toEqual([
+      "src/a.ts",
+      "~/notes.md",
+    ])
+  })
 })

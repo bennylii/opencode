@@ -4,6 +4,7 @@ const ARGUMENT_PATTERN = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi
 const PLACEHOLDER_PATTERN = /\$(\d+)/g
 const QUOTE_TRIM_PATTERN = /^["']|["']$/g
 const SHELL_PATTERN = /!`([^`]+)`/g
+const FILE_PATTERN = /(?<![\w`])@(\.?[^\s`,.]*(?:\.[^\s`,.]+)*)/g
 
 /** Split raw command arguments using the legacy quoting and image-placeholder rules. */
 export function parseArguments(input: string) {
@@ -31,6 +32,11 @@ export function expandTemplate(template: string, argumentsText: string) {
 
 export function shellMatches(template: string) {
   return Array.from(template.matchAll(SHELL_PATTERN), (match) => match[1]!)
+}
+
+/** Extract `@path` file mentions using the legacy lookbehind/quote rules. */
+export function fileMentions(template: string) {
+  return Array.from(template.matchAll(FILE_PATTERN), (match) => match[1]!).filter(Boolean)
 }
 
 export function replaceShellMatches(template: string, outputs: ReadonlyArray<string>) {
