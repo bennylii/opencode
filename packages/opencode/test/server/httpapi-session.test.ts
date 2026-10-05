@@ -1116,6 +1116,35 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "deletes a v2 session over HTTP",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ location: { directory: test.directory } }),
+        })
+        yield* request(`/api/session/${created.data.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "delete me" } }),
+        })
+
+        const removed = yield* request(`/api/session/${created.data.id}`, { method: "DELETE", headers })
+        expect(removed.status).toBe(200)
+        expect(yield* responseJson(removed)).toEqual({ data: true })
+
+        const missing = yield* request(`/api/session/${created.data.id}`, { headers })
+        expect(missing.status).toBe(404)
+        const again = yield* request(`/api/session/${created.data.id}`, { method: "DELETE", headers })
+        expect(again.status).toBe(404)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
     "returns safe v2 unknown errors for corrupt projected messages",
     () =>
       Effect.gen(function* () {

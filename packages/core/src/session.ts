@@ -25,7 +25,7 @@ import { InstallationVersion } from "./installation/version"
 import { Slug } from "./util/slug"
 import { ProjectTable } from "./project/sql"
 import path from "path"
-import { fromRow } from "./session/info"
+import { fromRow, toV1Info } from "./session/info"
 import { SessionRunner } from "./session/runner/index"
 import { SessionStore } from "./session/store"
 import { SessionExecution } from "./session/execution"
@@ -134,6 +134,7 @@ export interface Interface {
     sessionID: SessionSchema.ID
     messageID?: SessionMessage.ID
   }) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError>
+  readonly remove: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -395,6 +396,24 @@ const layer = Layer.effect(
             .pipe(Effect.orDie)
         }
         return created
+      }),
+      remove: Effect.fn("V2Session.remove")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            yield* execution.interrupt(sessionID)
+            yield* execution.await(sessionID)
+          }),
+        )
+        const row = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!row) return yield* new NotFoundError({ sessionID })
+        yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: toV1Info(row) }, { location: session.location })
+        yield* events.remove(sessionID)
       }),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
         const session = yield* store.get(sessionID)

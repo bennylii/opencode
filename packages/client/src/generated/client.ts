@@ -13,6 +13,8 @@ import type {
   SessionsGetOutput,
   SessionsForkInput,
   SessionsForkOutput,
+  SessionsRemoveInput,
+  SessionsRemoveOutput,
   SessionsSwitchAgentInput,
   SessionsSwitchAgentOutput,
   SessionsSwitchModelInput,
@@ -369,6 +371,17 @@ export function make(options: ClientOptions) {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/fork`,
             body: { messageID: input["messageID"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      remove: (input: SessionsRemoveInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsRemoveOutput }>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}`,
             successStatus: 200,
             declaredStatuses: [404, 400, 401],
             empty: false,

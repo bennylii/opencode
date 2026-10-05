@@ -304,9 +304,16 @@ export function DialogSessionList() {
               const status = session?.workspaceID ? project.workspace.status(session.workspaceID) : undefined
 
               try {
-                const result = await sdk.client.session.delete({
-                  sessionID: option.value,
-                })
+                const info = await sdk.client.v2.session.get({ sessionID: option.value }).then(
+                  (result) => result.data?.data,
+                  () => undefined,
+                )
+                const result =
+                  info?.runtime === "v2"
+                    ? await sdk.client.v2.session.remove({ sessionID: option.value })
+                    : await sdk.client.session.delete({
+                        sessionID: option.value,
+                      })
                 if (result.error) {
                   if (session?.workspaceID) {
                     recover(session)
