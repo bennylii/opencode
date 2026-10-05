@@ -1,6 +1,6 @@
 # Queue + Plan Workflow: V2 Core Port and TUI Migration
 
-Status: in progress (started 2026-10-03)
+Status: completed (2026-10-05)
 
 Goal: make the durable V2 prompt queue and the ZCode-style plan workflow usable from the
 main TUI, without breaking existing V1 sessions.
@@ -21,11 +21,20 @@ main TUI, without breaking existing V1 sessions.
 - [x] Post-phase - v2 slash command invocation (template expansion, shell
       interpolation, TUI routing)
 - [x] Post-phase - v2 session fork
+- [x] P0 - daily-driver routing fixes: interrupt, undo/redo revert, dialog
+      projection reads, v2 session delete
+- [x] P1 - v2 rename, share gate, tool metadata parity (apply_patch/websearch),
+      command `@file` mentions, v2 diff endpoint + legacy v1 diff bridge
+- [x] Fork hardening - continuing, queueing and reverting on a forked session
 
 The manual `bun dev` smoke is replaced by
 `packages/opencode/test/server/httpapi-session.test.ts` "runs an end-to-end v2
 queue flow over HTTP", which covers create (runtime v2), a held provider turn, a
-queued prompt, edit, sendNow promotion and the follow-up turn.
+queued prompt, edit, sendNow promotion and the follow-up turn. The same file
+covers shell, compact, wait, command expansion (including `@file` mentions),
+fork (plus continuing/queueing/reverting on a fork), revert, delete and rename.
+`packages/core/test/session-diff.test.ts` covers snapshot range selection for
+`SessionV2.diff`.
 
 ## Decisions
 
@@ -150,11 +159,22 @@ Commit: `feat(tui): submit v2 prompts with intent and queue delivery`
 
 ## Deferred (not in this project)
 
-These V2 protocol/core gaps must be filled before removing the TUI V2-session
-restrictions:
+These V2 protocol/core gaps remain before the TUI V2-session restrictions can be
+removed entirely:
 
-- Share/unshare, rename/update, delete at the V2 layer.
-- Todo and diff HTTP reads for V2 sessions.
-- Retry/status events equivalent to V1 `session.status`.
-- Tool parity: `task`, diagnostics, and complete `structured` -> TUI metadata
-  coverage for every built-in tool.
+- Share/unshare at the V2 layer. Sharing v2 sessions is explicitly rejected for
+  now (`SessionShare.share` checks `SessionTable.runtime`); unshare still routes
+  through V1.
+- Fork durable event history. `SessionV2.fork` copies projected messages with
+  fresh message IDs and advances the event sequence, but does not copy durable
+  event history, so `session.events` replay on a fork starts empty.
+- Command `subtask` agents. Commands with `subtask: true` degrade to a normal
+  prompt until a v2 task tool exists.
+- Tool parity: `task`, diagnostics, and remaining `structured` -> TUI metadata
+  coverage.
+- Retry/status parity. The TUI bridges v2 retry events, but there is no exact
+  V1 `session.status` equivalent.
+
+Completed from the earlier deferred list: v2 rename/update, v2 delete, v2 diff
+HTTP reads (with the legacy v1 endpoint bridged), v2 share rejection, and
+apply_patch/websearch metadata coverage.
