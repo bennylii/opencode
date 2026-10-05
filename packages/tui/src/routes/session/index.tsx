@@ -690,18 +690,36 @@ export function Session() {
         name: "undo",
       },
       run: async () => {
-        const status = sync.data.session_status?.[route.sessionID]
-        if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
-        const message = messagesBeforeRevert().findLast((item) => item.role === "user")
+        const message = messagesBeforeRevert().findLast(
+          (item) =>
+            item.role === "user" &&
+            (sessionRuntime() !== "v2" ||
+              partsFor(item.id).some((part) => (part.type === "text" && !part.synthetic) || part.type === "file")),
+        )
         if (!message) return
-        void sdk.client.session
-          .revert({
-            sessionID: route.sessionID,
-            messageID: message.id,
-          })
-          .then(() => {
-            toBottom()
-          })
+        if (sessionRuntime() === "v2") {
+          await sdk.client.v2.session.interrupt({ sessionID: route.sessionID }).catch(() => {})
+          await sdk.client.v2.session
+            .revert.stage({ sessionID: route.sessionID, messageID: message.id }, { throwOnError: true })
+            .catch((error) => {
+              toast.show({ message: errorMessage(error), variant: "error" })
+            })
+          await sync.session.sync(route.sessionID)
+          await data.session.refresh(route.sessionID)
+          await data.session.message.refresh(route.sessionID)
+          toBottom()
+        } else {
+          const status = sync.data.session_status?.[route.sessionID]
+          if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+          void sdk.client.session
+            .revert({
+              sessionID: route.sessionID,
+              messageID: message.id,
+            })
+            .then(() => {
+              toBottom()
+            })
+        }
         const parts = partsFor(message.id)
         prompt?.set(
           parts.reduce(
@@ -726,10 +744,37 @@ export function Session() {
       slash: {
         name: "redo",
       },
-      run: () => {
+      run: async () => {
         dialog.clear()
         const messageID = session()?.revert?.messageID
         if (!messageID) return
+        if (sessionRuntime() === "v2") {
+          await sdk.client.v2.session.interrupt({ sessionID: route.sessionID }).catch(() => {})
+          const next = messages().find(
+            (item) =>
+              item.role === "user" &&
+              item.id > messageID &&
+              partsFor(item.id).some((part) => (part.type === "text" && !part.synthetic) || part.type === "file"),
+          )
+          if (!next) {
+            await sdk.client.v2.session
+              .revert.clear({ sessionID: route.sessionID }, { throwOnError: true })
+              .catch((error) => {
+                toast.show({ message: errorMessage(error), variant: "error" })
+              })
+            prompt?.set({ input: "", parts: [] })
+          } else {
+            await sdk.client.v2.session
+              .revert.stage({ sessionID: route.sessionID, messageID: next.id }, { throwOnError: true })
+              .catch((error) => {
+                toast.show({ message: errorMessage(error), variant: "error" })
+              })
+          }
+          await sync.session.sync(route.sessionID)
+          await data.session.refresh(route.sessionID)
+          await data.session.message.refresh(route.sessionID)
+          return
+        }
         const message = messages().find((x) => x.role === "user" && x.id > messageID)
         if (!message) {
           void sdk.client.session.unrevert({

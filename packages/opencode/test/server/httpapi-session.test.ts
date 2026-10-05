@@ -1059,6 +1059,63 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "stages and clears a v2 revert over HTTP",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ location: { directory: test.directory } }),
+        })
+
+        yield* request(`/api/session/${created.data.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "revert me" } }),
+        })
+        const message = yield* pollWithTimeout(
+          requestJson<{ data: Array<{ id: string; type: string; text?: string }> }>(
+            `/api/session/${created.data.id}/message?order=asc`,
+            { headers },
+          ).pipe(Effect.map((body) => body.data.find((item) => item.type === "user" && item.text === "revert me"))),
+          "revert boundary message was not recorded",
+          "10 seconds",
+        )
+
+        const staged = yield* requestJson<{ data: { messageID: string } }>(
+          `/api/session/${created.data.id}/revert/stage`,
+          { method: "POST", headers, body: JSON.stringify({ messageID: message!.id }) },
+        )
+        expect(staged.data.messageID).toBe(message!.id)
+        const withRevert = yield* requestJson<{ data: { revert?: { messageID: string } } }>(
+          `/api/session/${created.data.id}`,
+          { headers },
+        )
+        expect(withRevert.data.revert?.messageID).toBe(message!.id)
+
+        const cleared = yield* request(`/api/session/${created.data.id}/revert/clear`, {
+          method: "POST",
+          headers,
+        })
+        expect(cleared.status).toBe(204)
+        const withoutRevert = yield* requestJson<{ data: { revert?: unknown } }>(`/api/session/${created.data.id}`, {
+          headers,
+        })
+        expect(withoutRevert.data.revert).toBeUndefined()
+
+        const missing = yield* request(`/api/session/${created.data.id}/revert/stage`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ messageID: "msg_missing" }),
+        })
+        expect(missing.status).toBe(404)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
     "returns safe v2 unknown errors for corrupt projected messages",
     () =>
       Effect.gen(function* () {
