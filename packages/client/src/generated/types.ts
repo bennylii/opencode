@@ -515,6 +515,11 @@ export type SessionsPromptInput = {
       readonly mode?: "build" | "edit" | "plan" | "yolo"
       readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
       readonly context?: { readonly maxInputTokens: number }
+      readonly task?: {
+        readonly agent: string
+        readonly description: string
+        readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      }
     } | null
     readonly resume?: boolean | null
   }["id"]
@@ -538,6 +543,11 @@ export type SessionsPromptInput = {
       readonly mode?: "build" | "edit" | "plan" | "yolo"
       readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
       readonly context?: { readonly maxInputTokens: number }
+      readonly task?: {
+        readonly agent: string
+        readonly description: string
+        readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      }
     } | null
     readonly resume?: boolean | null
   }["prompt"]
@@ -561,6 +571,11 @@ export type SessionsPromptInput = {
       readonly mode?: "build" | "edit" | "plan" | "yolo"
       readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
       readonly context?: { readonly maxInputTokens: number }
+      readonly task?: {
+        readonly agent: string
+        readonly description: string
+        readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      }
     } | null
     readonly resume?: boolean | null
   }["delivery"]
@@ -584,6 +599,11 @@ export type SessionsPromptInput = {
       readonly mode?: "build" | "edit" | "plan" | "yolo"
       readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
       readonly context?: { readonly maxInputTokens: number }
+      readonly task?: {
+        readonly agent: string
+        readonly description: string
+        readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      }
     } | null
     readonly resume?: boolean | null
   }["intent"]
@@ -607,6 +627,11 @@ export type SessionsPromptInput = {
       readonly mode?: "build" | "edit" | "plan" | "yolo"
       readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
       readonly context?: { readonly maxInputTokens: number }
+      readonly task?: {
+        readonly agent: string
+        readonly description: string
+        readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      }
     } | null
     readonly resume?: boolean | null
   }["resume"]
@@ -636,6 +661,11 @@ export type SessionsPromptOutput = {
       readonly mode?: "build" | "edit" | "plan" | "yolo"
       readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
       readonly context?: { readonly maxInputTokens: number }
+      readonly task?: {
+        readonly agent: string
+        readonly description: string
+        readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      }
     }
     readonly timeCreated: number
     readonly promotedSeq?: number
@@ -760,6 +790,11 @@ export type SessionsQueueListOutput = {
       readonly mode?: "build" | "edit" | "plan" | "yolo"
       readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
       readonly context?: { readonly maxInputTokens: number }
+      readonly task?: {
+        readonly agent: string
+        readonly description: string
+        readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      }
     }
     readonly timeCreated: number
     readonly promotedSeq?: number
@@ -1079,6 +1114,11 @@ export type SessionsHistoryOutput = {
             readonly mode?: "build" | "edit" | "plan" | "yolo"
             readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
             readonly context?: { readonly maxInputTokens: number }
+            readonly task?: {
+              readonly agent: string
+              readonly description: string
+              readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+            }
           }
         }
       }
@@ -1111,6 +1151,11 @@ export type SessionsHistoryOutput = {
             readonly mode?: "build" | "edit" | "plan" | "yolo"
             readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
             readonly context?: { readonly maxInputTokens: number }
+            readonly task?: {
+              readonly agent: string
+              readonly description: string
+              readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+            }
           }
         }
       }
@@ -1143,6 +1188,11 @@ export type SessionsHistoryOutput = {
             readonly mode?: "build" | "edit" | "plan" | "yolo"
             readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
             readonly context?: { readonly maxInputTokens: number }
+            readonly task?: {
+              readonly agent: string
+              readonly description: string
+              readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+            }
           }
         }
       }
@@ -1612,6 +1662,11 @@ export type SessionsEventsOutput =
           readonly mode?: "build" | "edit" | "plan" | "yolo"
           readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
           readonly context?: { readonly maxInputTokens: number }
+          readonly task?: {
+            readonly agent: string
+            readonly description: string
+            readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+          }
         }
       }
     }
@@ -1644,6 +1699,11 @@ export type SessionsEventsOutput =
           readonly mode?: "build" | "edit" | "plan" | "yolo"
           readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
           readonly context?: { readonly maxInputTokens: number }
+          readonly task?: {
+            readonly agent: string
+            readonly description: string
+            readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+          }
         }
       }
     }
@@ -1676,6 +1736,11 @@ export type SessionsEventsOutput =
           readonly mode?: "build" | "edit" | "plan" | "yolo"
           readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
           readonly context?: { readonly maxInputTokens: number }
+          readonly task?: {
+            readonly agent: string
+            readonly description: string
+            readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+          }
         }
       }
     }
