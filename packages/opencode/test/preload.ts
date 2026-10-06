@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { afterAll } from "bun:test"
 
 // Set XDG env vars FIRST, before any src/ imports
+const originalCacheHome = process.env["XDG_CACHE_HOME"]
 const dir = path.join(os.tmpdir(), "opencode-test-data-" + process.pid)
 await fs.mkdir(dir, { recursive: true })
 afterAll(async () => {
@@ -53,6 +54,23 @@ process.env["OPENCODE_TEST_MANAGED_CONFIG_DIR"] = testManagedConfigDir
 const cacheDir = path.join(dir, "cache", "opencode")
 await fs.mkdir(cacheDir, { recursive: true })
 await fs.writeFile(path.join(cacheDir, "version"), "14")
+
+// Seed the ripgrep binary into the isolated cache so tool tests do not
+// download it from GitHub on every run (network failures under load).
+const rgName = process.platform === "win32" ? "rg.exe" : "rg"
+const ripgrepSources = [
+  originalCacheHome && path.join(originalCacheHome, "opencode", "bin", rgName),
+  path.join(os.homedir(), ".cache", "opencode", "bin", rgName),
+].filter((candidate): candidate is string => !!candidate)
+for (const source of ripgrepSources) {
+  try {
+    await fs.access(source)
+    const target = path.join(dir, "cache", "opencode", "bin", rgName)
+    await fs.mkdir(path.dirname(target), { recursive: true })
+    await fs.copyFile(source, target)
+    break
+  } catch {}
+}
 
 // Clear provider and server auth env vars to ensure clean test state
 delete process.env["ANTHROPIC_API_KEY"]
