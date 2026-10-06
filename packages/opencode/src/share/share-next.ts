@@ -11,9 +11,12 @@ import { Provider } from "@/provider/provider"
 
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
-import type { SessionID } from "@/session/schema"
+import { V2Projection } from "@/session/v2-projection"
+import { SessionID } from "@/session/schema"
 import { Database } from "@opencode-ai/core/database/database"
-import { eq } from "drizzle-orm"
+import { SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
+import { asc, eq } from "drizzle-orm"
 import { Config } from "@/config/config"
 import { SessionShareTable } from "@opencode-ai/core/share/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -21,6 +24,16 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { EventV2 } from "@opencode-ai/core/event"
 
 const disabled = process.env["OPENCODE_DISABLE_SHARE"] === "true" || process.env["OPENCODE_DISABLE_SHARE"] === "1"
+
+const V2_SYNC_EVENTS = new Set([
+  "session.next.prompted",
+  "session.next.synthetic",
+  "session.next.shell.started",
+  "session.next.shell.ended",
+  "session.next.step.ended",
+  "session.next.step.failed",
+  "session.next.compaction.ended",
+])
 
 export type Api = {
   create: string
@@ -120,6 +133,7 @@ const layer = Layer.effect(
     const httpOk = HttpClient.filterStatusOk(http)
     const provider = yield* Provider.Service
     const session = yield* Session.Service
+    const decodeV2 = Schema.decodeUnknownEffect(SessionMessage.Message)
 
     function sync(sessionID: SessionID, data: Data[]) {
       return Effect.gen(function* () {
@@ -198,6 +212,15 @@ const layer = Layer.effect(
           sync(data.sessionID, [{ type: "session_diff", data: structuredClone(data.diff) as SDK.SnapshotFileDiff[] }]),
         )
         yield* watch(Session.Event.Deleted, (data) => remove(data.sessionID))
+        yield* events.listen((event) => {
+          if (!V2_SYNC_EVENTS.has(event.type)) return Effect.void
+          if (event.location?.directory !== _ctx.directory) return Effect.void
+          const sessionID = (event.data as { sessionID?: unknown }).sessionID
+          if (typeof sessionID !== "string") return Effect.void
+          return full(SessionID.make(sessionID)).pipe(
+            Effect.catchCause((cause) => Effect.logError("share v2 subscriber failed", { type: event.type, cause })),
+          )
+        })
 
         return cache
       }),
@@ -271,11 +294,38 @@ const layer = Layer.effect(
       }
     })
 
+    const runtimeOf = Effect.fnUntraced(function* (sessionID: SessionID) {
+      const row = yield* db
+        .select({ runtime: SessionTable.runtime })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      return row?.runtime ?? "v1"
+    })
+
+    const readV2 = Effect.fnUntraced(function* (sessionID: SessionID) {
+      const rows = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .orderBy(asc(SessionMessageTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      return yield* Effect.forEach(rows, (row) =>
+        decodeV2({ ...row.data, id: row.id, type: row.type }).pipe(Effect.orDie),
+      )
+    })
+
     const full = Effect.fn("ShareNext.full")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("full sync", { sessionID: sessionID })
+      if (!(yield* getCached(sessionID))) return
       const info = yield* session.get(sessionID)
       const diffs = yield* session.diff(sessionID)
-      const messages = yield* session.messages({ sessionID })
+      const messages =
+        (yield* runtimeOf(sessionID)) === "v2"
+          ? V2Projection.projectV2Messages(sessionID, yield* readV2(sessionID))
+          : yield* session.messages({ sessionID })
       const models = yield* Effect.forEach(
         Array.from(
           new Map(
@@ -285,9 +335,12 @@ const layer = Layer.effect(
               .map((item) => [`${item.providerID}/${item.modelID}`, item] as const),
           ).values(),
         ),
-        (item) => provider.getModel(ProviderV2.ID.make(item.providerID), ModelV2.ID.make(item.modelID)),
+        (item) =>
+          provider
+            .getModel(ProviderV2.ID.make(item.providerID), ModelV2.ID.make(item.modelID))
+            .pipe(Effect.catch(() => Effect.succeed(undefined))),
         { concurrency: 8 },
-      )
+      ).pipe(Effect.map((items) => items.flatMap((item) => (item ? [item] : []))))
 
       yield* sync(sessionID, [
         { type: "session", data: info },

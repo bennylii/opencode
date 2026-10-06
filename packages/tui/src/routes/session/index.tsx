@@ -506,11 +506,6 @@ export function Session() {
           dialog.clear()
           return
         }
-        if (sessionRuntime() === "v2") {
-          toast.show({ message: "Sharing is not available for v2 sessions yet", variant: "warning" })
-          dialog.clear()
-          return
-        }
         if (!kv.get("share_consent", false)) {
           const ok = await DialogConfirm.show(dialog, "Share Session", "Are you sure you want to share it?")
           if (ok !== true) return

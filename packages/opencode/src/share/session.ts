@@ -1,10 +1,7 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Database } from "@opencode-ai/core/database/database"
-import { SessionTable } from "@opencode-ai/core/session/sql"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { Effect, Layer, Scope, Context } from "effect"
-import { eq } from "drizzle-orm"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ShareNext } from "./share-next"
@@ -25,18 +22,10 @@ const layer = Layer.effect(
     const shareNext = yield* ShareNext.Service
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
-    const db = (yield* Database.Service).db
 
     const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
       const conf = yield* cfg.get()
       if (conf.share === "disabled") throw new Error("Sharing is disabled in configuration")
-      const row = yield* db
-        .select({ runtime: SessionTable.runtime })
-        .from(SessionTable)
-        .where(eq(SessionTable.id, sessionID))
-        .get()
-        .pipe(Effect.orDie)
-      if (row?.runtime === "v2") throw new Error("Sharing v2 sessions is not supported yet")
       const result = yield* shareNext.create(sessionID)
       yield* session.setShare({ sessionID, share: { url: result.url } })
       return result
@@ -63,7 +52,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, Database.node, Session.node, ShareNext.node, RuntimeFlags.node],
+  deps: [Config.node, Session.node, ShareNext.node, RuntimeFlags.node],
 })
 
 export * as SessionShare from "./session"

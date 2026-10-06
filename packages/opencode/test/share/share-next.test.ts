@@ -14,6 +14,10 @@ import type { SessionID } from "../../src/session/schema"
 import { ShareNext } from "@/share/share-next"
 import { SessionShareTable } from "@opencode-ai/core/share/sql"
 import { Database } from "@opencode-ai/core/database/database"
+import { SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
+import { SessionEvent } from "@opencode-ai/schema/session-event"
+import { DateTime } from "effect"
 import { eq } from "drizzle-orm"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
@@ -316,6 +320,112 @@ describe("ShareNext", () => {
               status: "modified",
             },
           ])
+        }).pipe(Effect.provide(integrationLayer(client)))
+      },
+      { config: { enterprise: { url: "https://legacy-share.example.com" } } },
+    ),
+  )
+
+  it.live("create syncs v2 sessions through the projection and live events", () =>
+    provideTmpdirInstance(
+      () => {
+        const seen: Array<{ url: string; body: string }> = []
+        const client = HttpClient.make((req) => {
+          if (req.url.endsWith("/sync") && req.body._tag === "Uint8Array") {
+            seen.push({ url: req.url, body: new TextDecoder().decode(req.body.body) })
+          }
+          if (req.method === "POST" && req.url.endsWith("/api/share")) {
+            return Effect.succeed(
+              json(req, {
+                id: "shr_v2",
+                url: "https://legacy-share.example.com/share/v2",
+                secret: "sec_v2",
+              }),
+            )
+          }
+          return Effect.succeed(json(req, { ok: true }))
+        })
+
+        return Effect.gen(function* () {
+          const session = yield* (yield* Session.Service).create({ title: "v2 share" })
+          const { db } = yield* Database.Service
+          yield* db
+            .update(SessionTable)
+            .set({ runtime: "v2" })
+            .where(eq(SessionTable.id, session.id))
+            .run()
+            .pipe(Effect.orDie)
+
+          const userID = SessionMessage.ID.create()
+          const assistantID = SessionMessage.ID.create()
+          const rows = [
+            {
+              id: userID,
+              session_id: session.id,
+              type: "user",
+              seq: 100,
+              time_created: 100,
+              data: { text: "hello v2", files: [], agents: [], time: { created: 100 } },
+            },
+            {
+              id: assistantID,
+              session_id: session.id,
+              type: "assistant",
+              seq: 101,
+              time_created: 101,
+              data: {
+                agent: "build",
+                model: { id: "test-model", providerID: "test" },
+                content: [{ type: "text", id: "content-1", text: "reply v2" }],
+                time: { created: 101 },
+              },
+            },
+          ]
+          yield* db
+            .insert(SessionMessageTable)
+            .values(rows as Array<typeof SessionMessageTable.$inferInsert>)
+            .run()
+            .pipe(Effect.orDie)
+
+          yield* (yield* ShareNext.Service).create(session.id)
+          yield* pollWithTimeout(
+            Effect.sync(() => (seen.length >= 1 ? true : undefined)),
+            "timed out waiting for v2 share sync",
+            "5 seconds",
+          )
+
+          type SyncItem = { type: string; data: Record<string, unknown> }
+          const body = JSON.parse(seen[0]!.body) as { secret: string; data: SyncItem[] }
+          expect(body.secret).toBe("sec_v2")
+          const messages = body.data.filter((item) => item.type === "message")
+          const parts = body.data.filter((item) => item.type === "part")
+          const user = messages.find((item) => item.data["role"] === "user")
+          const assistant = messages.find((item) => item.data["role"] === "assistant")
+          expect(user?.data["agent"]).toBe("build")
+          expect(assistant?.data["parentID"]).toBe(userID)
+          expect(
+            parts.some(
+              (item) =>
+                item.data["type"] === "text" &&
+                item.data["text"] === "reply v2" &&
+                String(item.data["id"]).startsWith("prt"),
+            ),
+          ).toBe(true)
+          expect(parts.some((item) => item.data["type"] === "text" && item.data["text"] === "hello v2")).toBe(true)
+
+          const events = yield* EventV2Bridge.Service
+          yield* events.publish(SessionEvent.Synthetic, {
+            timestamp: yield* DateTime.now,
+            sessionID: session.id,
+            messageID: SessionMessage.ID.create(),
+            text: "live v2",
+          })
+          yield* pollWithTimeout(
+            Effect.sync(() => (seen.length >= 2 ? true : undefined)),
+            "timed out waiting for live v2 share sync",
+            "5 seconds",
+          )
+          expect(seen.at(-1)!.body).toContain("live v2")
         }).pipe(Effect.provide(integrationLayer(client)))
       },
       { config: { enterprise: { url: "https://legacy-share.example.com" } } },
