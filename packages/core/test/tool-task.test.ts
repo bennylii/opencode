@@ -78,7 +78,7 @@ describe("TaskTool", () => {
                     },
                   } as typeof SessionMessageTable.$inferInsert)
                   .run()
-                  .pipe(Effect.orDie, Effect.asVoid),
+                  .pipe(Effect.orDie),
               interrupt: () => Effect.void,
             }),
           )

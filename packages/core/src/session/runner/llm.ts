@@ -18,6 +18,7 @@ import { FSUtil } from "../../fs-util"
 import { Location } from "../../location"
 import { ModelV2 } from "../../model"
 import { PermissionV2 } from "../../permission"
+import { ProjectV2 } from "../../project"
 import { ProviderV2 } from "../../provider"
 import { QuestionV2 } from "../../question"
 import { SystemContext } from "../../system-context/index"
@@ -36,6 +37,7 @@ import { PlanContinuation } from "../plan-continuation"
 import { PlanFile } from "../plan-file"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
+import { SessionSubtask } from "../subtask"
 import { type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
@@ -111,7 +113,9 @@ const layer = Layer.effect(
     const referenceGuidance = yield* ReferenceGuidance.Service
     const config = yield* Config.Service
     const snapshots = yield* Snapshot.Service
-    const db = (yield* Database.Service).db
+    const database = yield* Database.Service
+    const projects = yield* ProjectV2.Service
+    const db = database.db
     const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
@@ -207,7 +211,10 @@ const layer = Layer.effect(
       const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(initialAgent), session.id)
       // Promotion 在初始化之后：队列项在 admission 冻结的属性（计划/模型/思考强度/
       // 上下文预算）必须在本 provider turn 生效，并持久化为新的 session 选择。
-      type PromotedIntentRow = { readonly intent: SessionInput.Intent | null }
+      type PromotedIntentRow = {
+        readonly intent: SessionInput.Intent | null
+        readonly prompt: { readonly text: string }
+      }
       let promotedRows: ReadonlyArray<PromotedIntentRow> = []
       if (promotion) {
         const cutoff = yield* EventV2.latestSequence(db, session.id)
@@ -254,6 +261,95 @@ const layer = Layer.effect(
       const system =
         initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id))
       const model = yield* models.resolve(intentModelRef ? { ...session, model: intentModelRef } : session)
+      const taskIntent = intent?.task
+      if (taskIntent) {
+        const assistantMessageID = SessionMessage.ID.create()
+        const callID = SessionMessage.ID.create()
+        const taskInput = {
+          description: taskIntent.description,
+          prompt: promotedRows.at(-1)?.prompt.text ?? "",
+          subagent_type: taskIntent.agent,
+        }
+        yield* events.publish(SessionEvent.Step.Started, {
+          sessionID: session.id,
+          assistantMessageID,
+          timestamp: yield* DateTime.now,
+          agent: agent.id,
+          model: {
+            id: ModelV2.ID.make(model.id),
+            providerID: ProviderV2.ID.make(model.provider),
+            ...(intentModelRef?.variant ? { variant: intentModelRef.variant } : {}),
+          },
+        })
+        yield* events.publish(SessionEvent.Tool.Input.Started, {
+          sessionID: session.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID,
+          name: "task",
+        })
+        yield* events.publish(SessionEvent.Tool.Input.Ended, {
+          sessionID: session.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID,
+          text: JSON.stringify(taskInput),
+        })
+        yield* events.publish(SessionEvent.Tool.Called, {
+          sessionID: session.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID,
+          tool: "task",
+          input: taskInput,
+          provider: { executed: false },
+        })
+        const outcome = yield* SessionSubtask.run(
+          {
+            parentSessionID: session.id,
+            agent: AgentV2.ID.make(taskIntent.agent),
+            description: taskIntent.description,
+            prompt: taskInput.prompt,
+            model: intentModelRef ?? session.model ?? undefined,
+            progress: { assistantMessageID, callID },
+          },
+          { database, events, projects, store, drain: (sessionID) => run({ sessionID, force: true }) },
+        )
+        if (outcome.status === "completed") {
+          yield* events.publish(SessionEvent.Tool.Success, {
+            sessionID: session.id,
+            timestamp: yield* DateTime.now,
+            assistantMessageID,
+            callID,
+            structured: {
+              status: outcome.status,
+              sessionId: outcome.sessionId,
+              parentSessionId: session.id,
+              result: outcome.result,
+            },
+            content: [
+              {
+                type: "text",
+                text: SessionSubtask.taskOutput({
+                  status: outcome.status,
+                  sessionId: outcome.sessionId,
+                  result: outcome.result,
+                }),
+              },
+            ],
+            provider: { executed: false },
+          })
+        } else {
+          yield* events.publish(SessionEvent.Tool.Failed, {
+            sessionID: session.id,
+            timestamp: yield* DateTime.now,
+            assistantMessageID,
+            callID,
+            error: { type: "unknown", message: outcome.result },
+            provider: { executed: false },
+          })
+        }
+      }
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
       const contextSeq = entries.at(-1)?.seq ?? -1
@@ -611,5 +707,6 @@ export const node = makeLocationNode({
     Config.node,
     Snapshot.node,
     Database.node,
+    ProjectV2.node,
   ],
 })

@@ -1,21 +1,17 @@
 export * as TaskTool from "./task"
 
 import { ToolFailure } from "@opencode-ai/llm"
-import { DateTime, Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { AgentV2 } from "../agent"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { EventV2 } from "../event"
 import { PermissionV2 } from "../permission"
 import { ProjectV2 } from "../project"
-import { SessionCreate } from "../session/create"
-import { SessionEvent } from "../session/event"
 import { SessionExecution } from "../session/execution"
-import { SessionInput } from "../session/input"
-import { SessionMessage } from "../session/message"
-import { Prompt } from "../session/prompt"
 import { SessionSchema } from "../session/schema"
 import { SessionStore } from "../session/store"
+import { SessionSubtask } from "../session/subtask"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -50,21 +46,6 @@ export const description = [
   "The result of the task is returned when the subagent finishes.",
 ].join("\n")
 
-function contentText(content: ReadonlyArray<{ type: string; [key: string]: unknown }>) {
-  return content
-    .flatMap((item) => (item.type === "text" && typeof item["text"] === "string" ? [item["text"]] : []))
-    .join("\n")
-    .trim()
-}
-
-function taskOutput(input: { status: "completed" | "error"; sessionId: string; result: string }) {
-  const body =
-    input.status === "completed"
-      ? `<task_result>\n${input.result}\n</task_result>`
-      : `<task_error>\n${input.result}\n</task_error>`
-  return `<task id="${input.sessionId}" state="${input.status}">\n${body}\n</task>`
-}
-
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
@@ -83,7 +64,7 @@ const layer = Layer.effectDiscard(
           input: Input,
           output: Output,
           toModelOutput: ({ input, output }) =>
-            [{ type: "text", text: `${input.description}\n${taskOutput(output)}` }],
+            [{ type: "text", text: `${input.description}\n${SessionSubtask.taskOutput(output)}` }],
           execute: (input, context) =>
             Effect.gen(function* () {
               const parent = yield* store.get(context.sessionID)
@@ -125,58 +106,33 @@ const layer = Layer.effectDiscard(
                   message: `Task session does not belong to this session: ${input.task_id}`,
                 })
 
-              const child =
-                existing ??
-                (yield* SessionCreate.create(
-                  {
-                    location: parent.location,
-                    parentID: context.sessionID,
-                    agent: agent.id,
-                    title: `${input.description} (@${agent.id} subagent)`,
-                    ...(model ? { model } : {}),
-                  },
-                  { database, events, projects, store },
-                ))
-
-              yield* events.publish(SessionEvent.Tool.Progress, {
-                sessionID: context.sessionID,
-                timestamp: yield* DateTime.now,
-                assistantMessageID: context.assistantMessageID,
-                callID: context.toolCallID,
-                structured: {
-                  parentSessionId: context.sessionID,
-                  sessionId: child.id,
+              const outcome = yield* SessionSubtask.run(
+                {
+                  parentSessionID: context.sessionID,
+                  ...(existing ? { sessionID: existing.id } : {}),
+                  agent: agent.id,
+                  description: input.description,
+                  prompt: input.prompt,
                   ...(model ? { model } : {}),
+                  progress: { assistantMessageID: context.assistantMessageID, callID: context.toolCallID },
                 },
-                content: [],
-              })
-
-              yield* SessionInput.admit(database.db, events, {
-                id: SessionMessage.ID.create(),
-                sessionID: child.id,
-                prompt: Prompt.make({ text: input.prompt }),
-                delivery: "steer",
-              }).pipe(Effect.orDie)
-              yield* execution.wake(child.id)
-              yield* execution.await(child.id).pipe(
-                Effect.onInterrupt(() => execution.interrupt(child.id).pipe(Effect.ignore)),
+                {
+                  database,
+                  events,
+                  projects,
+                  store,
+                  drain: (sessionID) =>
+                    Effect.gen(function* () {
+                      yield* execution.wake(sessionID)
+                      yield* execution.await(sessionID)
+                    }).pipe(Effect.onInterrupt(() => execution.interrupt(sessionID).pipe(Effect.ignore))),
+                },
               )
-
-              const messages = yield* store.runnerContext(child.id, 0).pipe(Effect.orDie)
-              const last = messages.findLast((message) => message.type === "assistant")
-              if (last?.type === "assistant" && last.error)
-                return {
-                  status: "error" as const,
-                  sessionId: child.id,
-                  parentSessionId: context.sessionID,
-                  result: last.error.message,
-                }
-              const result = last?.type === "assistant" ? contentText(last.content) : ""
               return {
-                status: "completed" as const,
-                sessionId: child.id,
+                status: outcome.status,
+                sessionId: outcome.sessionId,
                 parentSessionId: context.sessionID,
-                result: result || "Task completed with no output.",
+                result: outcome.result,
               }
             }).pipe(
               Effect.mapError((error) =>

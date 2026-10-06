@@ -33,6 +33,20 @@ export const Intent = Schema.Struct({
       maxInputTokens: PositiveInt,
     }),
   ),
+  /** 子代理任务：命令以 subtask 语义执行时，在 provider turn 前派发一次 task 工具调用。 */
+  task: optional(
+    Schema.Struct({
+      agent: Schema.String,
+      description: Schema.String,
+      model: optional(
+        Schema.Struct({
+          providerID: Schema.String,
+          modelID: Schema.String,
+          variant: optional(Schema.String),
+        }),
+      ),
+    }),
+  ),
 }).annotate({ identifier: "SessionInput.Intent" })
 
 export interface Admitted extends Schema.Schema.Type<typeof Admitted> {}

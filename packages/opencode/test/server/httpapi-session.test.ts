@@ -1282,6 +1282,127 @@ describe("session HttpApi", () => {
     },
   )
 
+  it.live(
+    "runs subtask commands as task tool calls over HTTP",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const config = {
+          formatter: false,
+          lsp: false,
+          providers: {
+            test: {
+              name: "Test",
+              api: { type: "aisdk", package: "@ai-sdk/openai-compatible", url: llm.url },
+              request: { body: { apiKey: "test-key" } },
+              models: {
+                "test-model": {
+                  name: "Test Model",
+                  limit: { context: 100_000, output: 10_000 },
+                  cost: { input: 0, output: 0 },
+                },
+              },
+            },
+          },
+        }
+        const directory = yield* tmpdirScoped({
+          git: true,
+          config,
+          init: (dir) =>
+            Effect.promise(async () => {
+              const file = path.join(dir, ".opencode", "command", "sub.md")
+              await mkdir(path.dirname(file), { recursive: true })
+              await writeFile(file, "---\nagent: build\nsubtask: true\n---\nRun the sub task\n")
+            }),
+        })
+        const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ providerID: string; id: string }> }>("/api/model", { headers }).pipe(
+            Effect.map((body) =>
+              body.data.some((model) => model.providerID === "test" && model.id === "test-model")
+                ? true
+                : undefined,
+            ),
+          ),
+          "test model did not enter the catalog",
+          "10 seconds",
+        )
+
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            location: { directory },
+            agent: "build",
+            model: { id: "test-model", providerID: "test" },
+          }),
+        })
+        const sessionID = created.data.id
+
+        const run = yield* request(`/api/session/${sessionID}/command`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ command: "sub" }),
+        })
+        expect(run.status).toBe(204)
+
+        type V2Message = {
+          type: string
+          text?: string
+          content?: Array<{
+            type: string
+            name?: string
+            text?: string
+            state?: { status: string; structured?: Record<string, unknown> }
+          }>
+        }
+        const taskAssistant = yield* pollWithTimeout(
+          requestJson<{ data: V2Message[] }>(`/api/session/${sessionID}/message?order=asc`, { headers }).pipe(
+            Effect.map((body) =>
+              body.data.find(
+                (item) =>
+                  item.type === "assistant" &&
+                  item.content?.some(
+                    (part) => part.type === "tool" && part.name === "task" && part.state?.status === "completed",
+                  ),
+              ),
+            ),
+          ),
+          "task tool part was not recorded",
+          "15 seconds",
+        )
+        const childID = String(
+          taskAssistant.content!.find((part) => part.name === "task")!.state!.structured!["sessionId"],
+        )
+
+        const child = yield* requestJson<{ data: { parentID?: string } }>(`/api/session/${childID}`, { headers })
+        expect(child.data.parentID).toBe(sessionID)
+        const childMessages = yield* requestJson<{ data: V2Message[] }>(
+          `/api/session/${childID}/message?order=asc`,
+          { headers },
+        )
+        expect(childMessages.data.some((item) => item.type === "user" && item.text?.includes("Run the sub task"))).toBe(
+          true,
+        )
+
+        yield* pollWithTimeout(
+          requestJson<{ data: V2Message[] }>(`/api/session/${sessionID}/message?order=asc`, { headers }).pipe(
+            Effect.map((body) =>
+              body.data.some(
+                (item) =>
+                  item.type === "assistant" && item.content?.some((part) => part.type === "text" && part.text === "ok"),
+              )
+                ? true
+                : undefined,
+            ),
+          ),
+          "parent continuation was not recorded",
+          "15 seconds",
+        )
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
   it.instance(
     "forks a v2 session over HTTP",
     () =>

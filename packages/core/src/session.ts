@@ -511,8 +511,9 @@ const layer = Layer.effect(
       ),
       command: Effect.fn("V2Session.command")(function* (input) {
         const session = yield* result.get(input.sessionID)
+        const locationServices = locations.get(session.location)
         const command = yield* CommandV2.Service.use((commands) => commands.get(input.command)).pipe(
-          Effect.provide(locations.get(session.location)),
+          Effect.provide(locationServices),
         )
         if (!command) return yield* new CommandNotFoundError({ command: input.command })
 
@@ -547,11 +548,26 @@ const layer = Layer.effect(
 
         const agent = command.agent ?? input.agent
         const model = command.model ?? input.model
+        const agentInfo = agent
+          ? yield* AgentV2.Service.use((agents) => agents.get(AgentV2.ID.make(agent))).pipe(
+              Effect.provide(locationServices),
+            )
+          : undefined
+        const subtask = command.subtask === true || (agentInfo?.mode === "subagent" && command.subtask !== false)
         const intent: SessionInput.Intent = {
           ...(agent && ["build", "edit", "plan", "yolo"].includes(agent)
             ? { mode: agent as NonNullable<SessionInput.Intent["mode"]> }
             : {}),
           ...(model ? { model: { providerID: model.providerID, modelID: model.id, variant: model.variant } } : {}),
+          ...(subtask && agentInfo
+            ? {
+                task: {
+                  agent: agentInfo.id,
+                  description: command.description ?? input.command,
+                  ...(model ? { model: { providerID: model.providerID, modelID: model.id, variant: model.variant } } : {}),
+                },
+              }
+            : {}),
         }
         const files = [...(input.files ?? [])]
         const seen = new Set(files.map((file) => file.uri))
