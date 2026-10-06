@@ -547,11 +547,15 @@ export const ShellTool = Tool.define(
 
           if (exit.kind === "abort") {
             aborted = true
-            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(
+              Effect.catchCause((cause) => Effect.logWarning("failed to kill aborted shell", { cause })),
+            )
           }
           if (exit.kind === "timeout") {
             expired = true
-            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(
+              Effect.catchCause((cause) => Effect.logWarning("failed to kill timed-out shell", { cause })),
+            )
           }
 
           return exit.kind === "exit" ? exit.code : null
