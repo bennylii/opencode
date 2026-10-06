@@ -26,15 +26,20 @@ main TUI, without breaking existing V1 sessions.
 - [x] P1 - v2 rename, share gate, tool metadata parity (apply_patch/websearch),
       command `@file` mentions, v2 diff endpoint + legacy v1 diff bridge
 - [x] Fork hardening - continuing, queueing and reverting on a forked session
+- [x] P2 - v1 message read bridge for v2 sessions and typed rejection of v1
+      writes, v2 share support, task tool parity with subtask command execution
 
 The manual `bun dev` smoke is replaced by
 `packages/opencode/test/server/httpapi-session.test.ts` "runs an end-to-end v2
 queue flow over HTTP", which covers create (runtime v2), a held provider turn, a
 queued prompt, edit, sendNow promotion and the follow-up turn. The same file
 covers shell, compact, wait, command expansion (including `@file` mentions),
-fork (plus continuing/queueing/reverting on a fork), revert, delete and rename.
+fork (plus continuing/queueing/reverting on a fork), revert, delete, rename,
+v1 message projection and v1 write rejection, and subtask commands running as
+task tool calls.
 `packages/core/test/session-diff.test.ts` covers snapshot range selection for
-`SessionV2.diff`.
+`SessionV2.diff`, and `packages/core/test/tool-task.test.ts` covers child
+session creation, depth limits, task resume and result extraction.
 
 ## Decisions
 
@@ -162,19 +167,20 @@ Commit: `feat(tui): submit v2 prompts with intent and queue delivery`
 These V2 protocol/core gaps remain before the TUI V2-session restrictions can be
 removed entirely:
 
-- Share/unshare at the V2 layer. Sharing v2 sessions is explicitly rejected for
-  now (`SessionShare.share` checks `SessionTable.runtime`); unshare still routes
-  through V1.
 - Fork durable event history. `SessionV2.fork` copies projected messages with
   fresh message IDs and advances the event sequence, but does not copy durable
   event history, so `session.events` replay on a fork starts empty.
-- Command `subtask` agents. Commands with `subtask: true` degrade to a normal
-  prompt until a v2 task tool exists.
-- Tool parity: `task`, diagnostics, and remaining `structured` -> TUI metadata
-  coverage.
+- Background subagents. The task tool runs foreground turns only; background
+  promotion and `send_message`-style resume flows for child sessions are not
+  wired to a background job service.
+- Auto-share for v2 sessions. Sharing is manual; the v2 create path does not run
+  through `SessionShare.create`, so `share: "auto"` does not auto-share v2
+  sessions.
+- Tool parity: diagnostics, and remaining `structured` -> TUI metadata coverage.
 - Retry/status parity. The TUI bridges v2 retry events, but there is no exact
   V1 `session.status` equivalent.
 
 Completed from the earlier deferred list: v2 rename/update, v2 delete, v2 diff
-HTTP reads (with the legacy v1 endpoint bridged), v2 share rejection, and
-apply_patch/websearch metadata coverage.
+HTTP reads (with the legacy v1 endpoint bridged), v2 share and unshare, v2
+message reads through the v1 bridge with typed v1 write rejection, the task tool
+(including subtask commands), and apply_patch/websearch metadata coverage.
