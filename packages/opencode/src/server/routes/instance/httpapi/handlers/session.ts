@@ -15,6 +15,7 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
+import { V2Projection } from "@/session/v2-projection"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
@@ -38,7 +39,7 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { PermissionNotFoundError } from "../errors"
+import { notFound, PermissionNotFoundError, V1SessionOnlyError } from "../errors"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -85,6 +86,20 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* SessionError.mapStorageNotFound(session.get(sessionID))
     })
 
+    const isV2Session = Effect.fn("SessionHttpApi.isV2Session")(function* (sessionID: SessionID) {
+      const info = yield* sessionV2.get(sessionID).pipe(Effect.option)
+      return info._tag === "Some" && info.value.runtime === "v2"
+    })
+
+    const requireV1Session = Effect.fn("SessionHttpApi.requireV1Session")(function* (sessionID: SessionID) {
+      if (yield* isV2Session(sessionID))
+        yield* new V1SessionOnlyError({
+          sessionID,
+          message: `Session ${sessionID} uses the v2 runtime; use the v2 session API instead`,
+        })
+      return yield* requireSession(sessionID)
+    })
+
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
       return yield* requireSession(ctx.params.sessionID)
     })
@@ -121,11 +136,45 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       query: typeof MessagesQuery.Type
     }) {
       if (ctx.query.before && ctx.query.limit === undefined) return yield* new HttpApiError.BadRequest({})
-      if (ctx.query.before) {
-        const before = ctx.query.before
-        yield* Effect.try({
-          try: () => MessageV2.cursor.decode(before),
-          catch: () => new HttpApiError.BadRequest({}),
+      const before = ctx.query.before
+        ? yield* Effect.try({
+            try: () => MessageV2.cursor.decode(ctx.query.before!),
+            catch: () => new HttpApiError.BadRequest({}),
+          })
+        : undefined
+      if (yield* isV2Session(ctx.params.sessionID)) {
+        const all = yield* sessionV2
+          .messages({ sessionID: ctx.params.sessionID, order: "asc" })
+          .pipe(
+            Effect.catchTag("Session.NotFoundError", () => Effect.succeed([])),
+            Effect.catchTag("Session.MessageDecodeError", () => Effect.succeed([])),
+          )
+        const projected = V2Projection.projectV2Messages(ctx.params.sessionID, all)
+        if (ctx.query.limit === undefined || ctx.query.limit === 0) return projected
+        const older = before
+          ? projected.filter(
+              (item) =>
+                item.info.time.created < before.time ||
+                (item.info.time.created === before.time && String(item.info.id) < String(before.id)),
+            )
+          : projected
+        const page = older.slice(-ctx.query.limit)
+        if (older.length <= ctx.query.limit) return page
+        const first = page[0]!
+        const cursor = MessageV2.cursor.encode({ id: MessageID.make(first.info.id), time: first.info.time.created })
+
+        const request = yield* HttpServerRequest.HttpServerRequest
+        // toURL() honors the Host + x-forwarded-proto headers, so the Link
+        // header echoes the real origin instead of a hard-coded localhost.
+        const url = Option.getOrElse(HttpServerRequest.toURL(request), () => new URL(request.url, "http://localhost"))
+        url.searchParams.set("limit", ctx.query.limit.toString())
+        url.searchParams.set("before", cursor)
+        return HttpServerResponse.jsonUnsafe(page, {
+          headers: {
+            "Access-Control-Expose-Headers": "Link, X-Next-Cursor",
+            Link: `<${url.toString()}>; rel="next"`,
+            "X-Next-Cursor": cursor,
+          },
         })
       }
       yield* requireSession(ctx.params.sessionID)
@@ -160,6 +209,19 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const message = Effect.fn("SessionHttpApi.message")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
+      if (yield* isV2Session(ctx.params.sessionID)) {
+        const all = yield* sessionV2
+          .messages({ sessionID: ctx.params.sessionID, order: "asc" })
+          .pipe(
+            Effect.catchTag("Session.NotFoundError", () => Effect.succeed([])),
+            Effect.catchTag("Session.MessageDecodeError", () => Effect.succeed([])),
+          )
+        const found = V2Projection.projectV2Messages(ctx.params.sessionID, all).find(
+          (item) => String(item.info.id) === String(ctx.params.messageID),
+        )
+        if (!found) return yield* notFound(`Message not found: ${ctx.params.messageID}`)
+        return found
+      }
       return yield* SessionError.mapStorageNotFound(
         MessageV2.get({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
       )
@@ -189,6 +251,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* requireV1Session(ctx.params.sessionID)
       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
       return true
     })
@@ -197,7 +260,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof UpdatePayload.Type
     }) {
-      const current = yield* requireSession(ctx.params.sessionID)
+      const current = yield* requireV1Session(ctx.params.sessionID)
       if (ctx.payload.title !== undefined) {
         yield* session.setTitle({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
       }
@@ -213,13 +276,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       if (ctx.payload.time?.archived !== undefined) {
         yield* session.setArchived({ sessionID: ctx.params.sessionID, time: ctx.payload.time.archived })
       }
-      return yield* requireSession(ctx.params.sessionID)
+      return yield* requireV1Session(ctx.params.sessionID)
     })
 
     const fork = Effect.fn("SessionHttpApi.fork")(function* (ctx: {
       params: { sessionID: SessionID }
       payload?: typeof ForkPayload.Type
     }) {
+      yield* requireV1Session(ctx.params.sessionID)
       return yield* SessionError.mapStorageNotFound(
         session.fork({
           sessionID: ctx.params.sessionID,
@@ -243,6 +307,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
+      if (yield* isV2Session(ctx.params.sessionID))
+        yield* new V1SessionOnlyError({
+          sessionID: ctx.params.sessionID,
+          message: `Session ${ctx.params.sessionID} uses the v2 runtime; use the v2 session API instead`,
+        })
       yield* promptSvc.cancel(ctx.params.sessionID)
       return true
     })
@@ -251,7 +320,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof InitPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireV1Session(ctx.params.sessionID)
       yield* promptSvc
         .command({
           sessionID: ctx.params.sessionID,
@@ -287,7 +356,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof SummarizePayload.Type
     }) {
-      yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
+      yield* revertSvc.cleanup(yield* requireV1Session(ctx.params.sessionID))
       const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       const defaultAgent = yield* agentSvc.defaultAgent()
       const currentAgent = messages.findLast((message) => message.info.role === "user")?.info.agent ?? defaultAgent
@@ -309,7 +378,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireV1Session(ctx.params.sessionID)
       const message = yield* promptSvc
         .prompt({
           ...ctx.payload,
@@ -325,7 +394,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireV1Session(ctx.params.sessionID)
       yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -345,7 +414,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof CommandPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireV1Session(ctx.params.sessionID)
       return yield* promptSvc
         .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
@@ -355,7 +424,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof ShellPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireV1Session(ctx.params.sessionID)
       return yield* SessionError.mapBusy(promptSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }))
     })
 
@@ -363,12 +432,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof RevertPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireV1Session(ctx.params.sessionID)
       return yield* SessionError.mapBusy(revertSvc.revert({ sessionID: ctx.params.sessionID, ...ctx.payload }))
     })
 
     const unrevert = Effect.fn("SessionHttpApi.unrevert")(function* (ctx: { params: { sessionID: SessionID } }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireV1Session(ctx.params.sessionID)
       return yield* SessionError.mapBusy(revertSvc.unrevert({ sessionID: ctx.params.sessionID }))
     })
 
@@ -376,7 +445,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID; permissionID: PermissionV1.ID }
       payload: typeof PermissionResponsePayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireV1Session(ctx.params.sessionID)
       yield* permissionSvc.reply({ requestID: ctx.params.permissionID, reply: ctx.payload.response }).pipe(
         Effect.catchTag("Permission.NotFoundError", (error) =>
           Effect.fail(
@@ -393,7 +462,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const deleteMessage = Effect.fn("SessionHttpApi.deleteMessage")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireV1Session(ctx.params.sessionID)
       yield* SessionError.mapBusy(runState.assertNotBusy(ctx.params.sessionID))
       yield* session.removeMessage(ctx.params)
       return true
@@ -402,7 +471,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const deletePart = Effect.fn("SessionHttpApi.deletePart")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireV1Session(ctx.params.sessionID)
       yield* session.removePart(ctx.params)
       return true
     })
@@ -411,7 +480,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
       payload: typeof SessionV1.Part.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireV1Session(ctx.params.sessionID)
       const payload = ctx.payload as SessionV1.Part
       if (
         payload.id !== ctx.params.partID ||

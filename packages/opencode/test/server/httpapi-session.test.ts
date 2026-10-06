@@ -1015,6 +1015,215 @@ describe("session HttpApi", () => {
       }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
   )
 
+  it.live(
+    "serves v2 session messages through the v1 bridge",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const config = {
+          formatter: false,
+          lsp: false,
+          providers: {
+            test: {
+              name: "Test",
+              api: { type: "aisdk", package: "@ai-sdk/openai-compatible", url: llm.url },
+              request: { body: { apiKey: "test-key" } },
+              models: {
+                "test-model": {
+                  name: "Test Model",
+                  limit: { context: 100_000, output: 10_000 },
+                  cost: { input: 0, output: 0 },
+                },
+              },
+            },
+          },
+        }
+        const directory = yield* tmpdirScoped({ git: true, config })
+        const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ providerID: string; id: string }> }>("/api/model", { headers }).pipe(
+            Effect.map((body) =>
+              body.data.some((model) => model.providerID === "test" && model.id === "test-model")
+                ? true
+                : undefined,
+            ),
+          ),
+          "test model did not enter the catalog",
+          "10 seconds",
+        )
+
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            location: { directory },
+            agent: "build",
+            model: { id: "test-model", providerID: "test" },
+          }),
+        })
+        const sessionID = created.data.id
+
+        yield* request(`/api/session/${sessionID}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "hello bridge" } }),
+        })
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ type: string }> }>(`/api/session/${sessionID}/message?order=asc`, {
+            headers,
+          }).pipe(Effect.map((body) => (body.data.some((item) => item.type === "assistant") ? true : undefined))),
+          "assistant reply was not recorded",
+          "10 seconds",
+        )
+
+        const shell = yield* request(`/api/session/${sessionID}/shell`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ command: "echo bridged" }),
+        })
+        expect(shell.status).toBe(204)
+        yield* pollWithTimeout(
+          requestJson<{ data: Array<{ type: string; output?: string }> }>(`/api/session/${sessionID}/message?order=asc`, {
+            headers,
+          }).pipe(
+            Effect.map((body) =>
+              body.data.some((item) => item.type === "shell" && item.output?.includes("bridged")) ? true : undefined,
+            ),
+          ),
+          "shell message was not recorded",
+          "10 seconds",
+        )
+
+        type Bridged = {
+          info: {
+            id: string
+            role: string
+            agent?: string
+            model?: { providerID: string; modelID: string }
+            parentID?: string
+            time: { created: number }
+          }
+          parts: Array<{
+            id: string
+            type: string
+            text?: string
+            tool?: string
+            state?: { status: string; output?: string; metadata?: Record<string, unknown> }
+          }>
+        }
+        const route = pathFor(SessionPaths.messages, { sessionID })
+        const messages = yield* requestJson<Bridged[]>(route, { headers })
+        const user = messages.find(
+          (item) => item.info.role === "user" && item.parts.some((part) => part.text === "hello bridge"),
+        )
+        expect(user?.info.agent).toBe("build")
+        expect(user?.info.model).toMatchObject({ providerID: "test", modelID: "test-model" })
+        const assistant = messages.find(
+          (item) => item.info.role === "assistant" && item.info.parentID === user?.info.id,
+        )
+        expect(assistant).toBeDefined()
+        expect(assistant?.parts.some((part) => part.type === "text" && part.text === "ok")).toBe(true)
+        expect(
+          messages.some((item) =>
+            item.parts.some(
+              (part) =>
+                part.tool === "bash" &&
+                part.state?.status === "completed" &&
+                typeof part.state.metadata?.["output"] === "string" &&
+                part.state.metadata["output"].includes("bridged"),
+            ),
+          ),
+        ).toBe(true)
+        expect(messages.flatMap((item) => item.parts).every((part) => part.id.startsWith("prt"))).toBe(true)
+        expect(messages.every((item) => typeof item.info.time.created === "number")).toBe(true)
+
+        const single = yield* requestJson<Bridged>(
+          pathFor(SessionPaths.message, { sessionID, messageID: user!.info.id }),
+          { headers },
+        )
+        expect(single.info.id).toBe(user!.info.id)
+
+        const missing = yield* request(
+          pathFor(SessionPaths.message, { sessionID, messageID: "msg_missing_bridge" }),
+          { headers },
+        )
+        expect(missing.status).toBe(404)
+
+        const firstPageResponse = yield* request(`${route}?limit=2`, { headers })
+        expect(firstPageResponse.headers["x-next-cursor"]).toBeTruthy()
+        const firstPage = yield* json<Bridged[]>(firstPageResponse)
+        expect(firstPage.length).toBe(2)
+        const secondPage = yield* requestJson<Bridged[]>(
+          `${route}?limit=2&before=${encodeURIComponent(firstPageResponse.headers["x-next-cursor"]!)}`,
+          { headers },
+        )
+        expect(new Set([...firstPage, ...secondPage].map((item) => item.info.id)).size).toBe(
+          firstPage.length + secondPage.length,
+        )
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
+  it.instance(
+    "rejects v1 write routes for v2 sessions",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ location: { directory: test.directory } }),
+        })
+        const sessionID = created.data.id
+
+        const expectV1Only = (path: string, init: RequestInit) =>
+          Effect.gen(function* () {
+            const response = yield* request(path, { headers, ...init })
+            expect(response.status).toBe(400)
+            expect(JSON.stringify(yield* responseJson(response))).toContain("v2 runtime")
+          })
+
+        yield* expectV1Only(pathFor(SessionPaths.prompt, { sessionID }), {
+          method: "POST",
+          body: JSON.stringify({ agent: "build", parts: [{ type: "text", text: "hi" }] }),
+        })
+        yield* expectV1Only(pathFor(SessionPaths.command, { sessionID }), {
+          method: "POST",
+          body: JSON.stringify({ command: "init", arguments: "", agent: "build" }),
+        })
+        yield* expectV1Only(pathFor(SessionPaths.shell, { sessionID }), {
+          method: "POST",
+          body: JSON.stringify({ command: "echo hi", agent: "build" }),
+        })
+        yield* expectV1Only(pathFor(SessionPaths.summarize, { sessionID }), {
+          method: "POST",
+          body: JSON.stringify({ providerID: "test", modelID: "test" }),
+        })
+        yield* expectV1Only(pathFor(SessionPaths.revert, { sessionID }), {
+          method: "POST",
+          body: JSON.stringify({ messageID: "msg_missing" }),
+        })
+        yield* expectV1Only(pathFor(SessionPaths.abort, { sessionID }), { method: "POST" })
+        yield* expectV1Only(pathFor(SessionPaths.update, { sessionID }), {
+          method: "PATCH",
+          body: JSON.stringify({ title: "nope" }),
+        })
+        yield* expectV1Only(pathFor(SessionPaths.fork, { sessionID }), {
+          method: "POST",
+          body: JSON.stringify({}),
+        })
+        yield* expectV1Only(pathFor(SessionPaths.deleteMessage, { sessionID, messageID: "msg_missing" }), {
+          method: "DELETE",
+        })
+        yield* expectV1Only(pathFor(SessionPaths.remove, { sessionID }), { method: "DELETE" })
+
+        const messages = yield* requestJson<unknown[]>(pathFor(SessionPaths.messages, { sessionID }), { headers })
+        expect(messages).toEqual([])
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   it.instance(
     "expands v2 slash commands over HTTP",
     () =>

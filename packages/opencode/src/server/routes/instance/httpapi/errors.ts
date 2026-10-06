@@ -122,6 +122,15 @@ export class SessionBusyError extends Schema.TaggedErrorClass<SessionBusyError>(
   { httpApiStatus: 409 },
 ) {}
 
+export class V1SessionOnlyError extends Schema.TaggedErrorClass<V1SessionOnlyError>()(
+  "V1SessionOnlyError",
+  {
+    sessionID: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 400 },
+) {}
+
 export class QuestionNotFoundError extends Schema.TaggedErrorClass<QuestionNotFoundError>()(
   "QuestionNotFoundError",
   {
