@@ -25,6 +25,10 @@ export const load = (dir: string) =>
         shorthands,
         warn: false,
       })
+      // npm only reads the project .npmrc when it detects a local prefix
+      // (package.json or node_modules). This API already knows the project
+      // directory, so pin it explicitly and skip that detection.
+      config.localPrefix = dir
       await config.load()
       return config.flat as Record<string, unknown>
     },
