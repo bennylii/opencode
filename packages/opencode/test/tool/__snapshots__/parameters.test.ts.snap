@@ -189,7 +189,31 @@ exports[`tool parameters JSON Schema (wire shape) lsp 1`] = `
 exports[`tool parameters JSON Schema (wire shape) plan 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "properties": {},
+  "properties": {
+    "allowedPrompts": {
+      "description": "Concrete permission rules to pre-approve for execution, e.g. { permission: "bash", pattern: "npm test*" }.",
+      "items": {
+        "properties": {
+          "pattern": {
+            "type": "string",
+          },
+          "permission": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "permission",
+          "pattern",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "plan": {
+      "description": "Final plan markdown. When provided it is written to the plan file before approval.",
+      "type": "string",
+    },
+  },
   "type": "object",
 }
 `;
