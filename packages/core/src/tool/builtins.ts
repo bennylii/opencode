@@ -13,6 +13,7 @@ import { QuestionTool } from "./question"
 import { ReadTool } from "./read"
 import { SendMessageTool } from "./send-message"
 import { SkillTool } from "./skill"
+import { TaskTool } from "./task"
 import { TodoWriteTool } from "./todowrite"
 import { WebFetchTool } from "./webfetch"
 import { WebSearchTool } from "./websearch"
@@ -27,7 +28,7 @@ import { WriteTool } from "./write"
  * services once to this merged set.
  *
  * TODO: Port the remaining launch-follow-up leaves deliberately: edit fuzzy
- * parity, task, LSP, repo_clone, repo_overview, and Rune/code mode. Keep MCP and plugin
+ * parity, LSP, repo_clone, repo_overview, and Rune/code mode. Keep MCP and plugin
  * transforms separate from this static built-in list.
  */
 export const node = makeLocationNode({
@@ -45,6 +46,7 @@ export const node = makeLocationNode({
     ReadTool.node,
     SendMessageTool.node,
     SkillTool.node,
+    TaskTool.node,
     TodoWriteTool.node,
     WebFetchTool.node,
     WebSearchTool.node,
